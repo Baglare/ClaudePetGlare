@@ -1,0 +1,4 @@
+bin/
+obj/
+Teslim/
+.claude/settings.local.json
