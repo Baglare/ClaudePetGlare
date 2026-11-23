@@ -30,6 +30,42 @@ internal static class BackgroundRemover
     /// <summary>Where the model is kept; tests may point elsewhere.</summary>
     internal static string ModelPath { get; set; } = Path.Combine(Preferences.Folder, "Models", "u2netp.onnx");
 
+    internal enum ModelStatus { Missing, Corrupt, Ready }
+
+    private static (string Path, long Length, DateTime Written, bool Valid)? verified;
+
+    /// <summary>Missing, corrupt (wrong size or checksum) or ready. The checksum is cached until the file changes.</summary>
+    internal static ModelStatus Status()
+    {
+        try
+        {
+            var file = new FileInfo(ModelPath);
+            if (!file.Exists) return ModelStatus.Missing;
+            if (file.Length != ModelBytes) return ModelStatus.Corrupt;
+            var key = (ModelPath, file.Length, file.LastWriteTimeUtc);
+            if (verified is not { } v || (v.Path, v.Length, v.Written) != key)
+                verified = (key.ModelPath, key.Length, key.LastWriteTimeUtc, HashMatches(ModelPath));
+            return verified.Value.Valid ? ModelStatus.Ready : ModelStatus.Corrupt;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return ModelStatus.Corrupt;
+        }
+    }
+
+    /// <summary>Removes a bad model so it can be downloaded again.</summary>
+    internal static void DeleteModel()
+    {
+        lock (gate)
+        {
+            session?.Dispose();
+            session = null;
+        }
+        verified = null;
+        try { File.Delete(ModelPath); }
+        catch (IOException) { }
+    }
+
     internal static bool ModelPresent
     {
         get
@@ -66,6 +102,7 @@ internal static class BackgroundRemover
             }
             if (!HashMatches(partial)) throw new InvalidDataException("İndirilen modelin özeti tutmadı; dosya silindi.");
             File.Move(partial, ModelPath, overwrite: true);
+            verified = null;
         }
         finally
         {
@@ -84,7 +121,7 @@ internal static class BackgroundRemover
         lock (gate)
         {
             if (session is not null) return session;
-            if (!ModelPresent || !HashMatches(ModelPath))
+            if (Status() != ModelStatus.Ready)
                 throw new InvalidDataException("Arka plan modeli eksik veya bozuk.");
             var options = new SessionOptions { GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL };
             options.IntraOpNumThreads = Math.Max(1, Environment.ProcessorCount / 2);

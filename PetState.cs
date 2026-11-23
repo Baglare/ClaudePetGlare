@@ -11,6 +11,20 @@ internal enum AlertKind { Attention, Complete, Error }
 /// <summary>Something worth telling the user about outside the bubble.</summary>
 internal sealed record PetAlert(AlertKind Kind, string? Project, string Message, TimeSpan TurnLength);
 
+/// <summary>A tool that started and has not finished yet.</summary>
+internal sealed class RunningTool
+{
+    internal RunningTool(string id, ToolKind kind, string message, TimeSpan started) =>
+        (Id, Kind, Message, Started) = (id, kind, message, started);
+
+    internal string Id { get; }
+    internal ToolKind Kind { get; }
+    internal string Message { get; }
+    internal TimeSpan Started { get; }
+    /// <summary>Set while this tool waits for the user (permission, question, plan).</summary>
+    internal string? Waiting { get; set; }
+}
+
 /// <summary>The live status of one Claude Code session.</summary>
 internal sealed class SessionStatus
 {
@@ -28,6 +42,12 @@ internal sealed class SessionStatus
     internal TimeSpan TurnStarted { get; set; }
     internal TimeSpan Deadline { get; set; }
     internal TimeSpan WarningUntil { get; set; }
+    internal string WarningMessage { get; set; } = "";
+    /// <summary>Tools running in parallel, by tool use id; one finishing leaves the others.</summary>
+    internal Dictionary<string, RunningTool> Tools { get; } = new(StringComparer.Ordinal);
+    /// <summary>A wait for the user that no running tool accounts for.</summary>
+    internal string? WaitingMessage { get; set; }
+    internal int UnnamedTools { get; set; }
 
     internal string Title => Project ?? $"Oturum {Id[..Math.Min(6, Id.Length)]}";
 
@@ -117,6 +137,7 @@ internal sealed class PetState
                 sessions.Remove(notice.Session);
                 return null;
             case HookEvent.Prompt:
+                ResetTurn(session);
                 session.Prompt = notice.Prompt;
                 session.InTurn = true;
                 session.TurnStarted = now;
@@ -140,36 +161,51 @@ internal sealed class PetState
 
         switch (notice.Event)
         {
-            case HookEvent.Tool when notice.Tool is ToolKind.Question or ToolKind.Plan:
-            {
-                bool was = session.Phase == PetPhase.Attention;
-                var message = notice.Tool == ToolKind.Question ? "Sana soru soruyor" : "Plan onayı bekleniyor";
-                Show(session, PetPhase.Attention, message, now, AttentionTimeout);
-                return was ? null : new PetAlert(AlertKind.Attention, session.Project, message, now - session.TurnStarted);
-            }
             case HookEvent.Tool:
-                Show(session, PetPhase.Working, ToolMessage(notice), now, WorkingTimeout);
-                return null;
-            case HookEvent.ToolDone:
-                if (!session.Warning || now >= session.WarningUntil)
-                    Show(session, PetPhase.Working, "Claude düşünüyor", now, WorkingTimeout);
-                return null;
-            case HookEvent.ToolFailed:
-                Show(session, PetPhase.Working, FailureMessage(notice.Tool), now, WorkingTimeout);
-                session.Warning = true;
-                session.WarningUntil = now + WarningTime;
-                return null;
-            case HookEvent.Permission or HookEvent.Attention:
             {
-                bool was = session.Phase == PetPhase.Attention;
-                var message = notice.Event == HookEvent.Permission ? "Onay bekleniyor" : "Yanıtını bekliyor";
-                if (was && notice.Event == HookEvent.Attention) return null;
-                Show(session, PetPhase.Attention, message, now, AttentionTimeout);
-                return was ? null : new PetAlert(AlertKind.Attention, session.Project, message, now - session.TurnStarted);
+                // Claude moved on, so a wait that no tool accounts for is over.
+                session.WaitingMessage = null;
+                var id = notice.ToolUse ?? $"#{++session.UnnamedTools}";
+                var tool = new RunningTool(id, notice.Tool, ToolMessage(notice), now);
+                if (notice.Tool is ToolKind.Question or ToolKind.Plan)
+                    tool.Waiting = notice.Tool == ToolKind.Question ? "Sana soru soruyor" : "Plan onayı bekleniyor";
+                session.Tools[id] = tool;
+                return Refresh(session, now);
+            }
+            case HookEvent.ToolDone or HookEvent.ToolFailed:
+            {
+                if (FindTool(session, notice) is { } done) session.Tools.Remove(done.Id);
+                // A result for a tool Petglare never saw start (it started mid-turn) ends a wait no tool accounts for.
+                else session.WaitingMessage = null;
+                if (notice.Event == HookEvent.ToolFailed)
+                {
+                    session.Warning = true;
+                    session.WarningUntil = now + WarningTime;
+                    session.WarningMessage = FailureMessage(notice.Tool);
+                }
+                return Refresh(session, now);
+            }
+            case HookEvent.Permission:
+            {
+                var tool = notice.ToolUse is { } id && session.Tools.TryGetValue(id, out var exact) ? exact
+                    : session.Tools.Values.Where(t => t.Waiting is null)
+                        .OrderBy(t => t.Kind == notice.Tool && notice.Tool != ToolKind.Other ? 0 : 1)
+                        .ThenByDescending(t => t.Started).FirstOrDefault();
+                if (tool is not null) tool.Waiting = "Onay bekleniyor";
+                else session.WaitingMessage = "Onay bekleniyor";
+                return Refresh(session, now);
+            }
+            case HookEvent.Attention:
+            {
+                // A permission prompt or question notification repeats a wait that is already shown.
+                if (session.Tools.Values.Any(t => t.Waiting is not null) || session.WaitingMessage is not null) return null;
+                session.WaitingMessage = "Yanıtını bekliyor";
+                return Refresh(session, now);
             }
             case HookEvent.Stop:
             {
                 var length = now - session.TurnStarted;
+                ResetTurn(session);
                 session.InTurn = false;
                 Show(session, PetPhase.Complete, "✓", now, CompleteTime);
                 return new PetAlert(AlertKind.Complete, session.Project, "Yanıt tamamlandı", length);
@@ -177,6 +213,7 @@ internal sealed class PetState
             case HookEvent.Failure:
             {
                 var length = now - session.TurnStarted;
+                ResetTurn(session);
                 session.InTurn = false;
                 Show(session, PetPhase.Error, "Claude API hatası", now, ErrorTime);
                 return new PetAlert(AlertKind.Error, session.Project, "Claude API hatası", length);
@@ -184,6 +221,50 @@ internal sealed class PetState
         }
         return null;
     }
+
+    /// <summary>
+    /// The tool a result belongs to: by tool use id; without one, the oldest running tool of
+    /// the same kind (results then arrive in start order).
+    /// </summary>
+    private static RunningTool? FindTool(SessionStatus session, HookNotice notice)
+    {
+        if (notice.ToolUse is { } id) return session.Tools.GetValueOrDefault(id);
+        return session.Tools.Values.Where(t => t.Kind == notice.Tool).OrderBy(t => t.Started).FirstOrDefault()
+               ?? (session.Tools.Count == 1 ? session.Tools.Values.First() : null);
+    }
+
+    private static void ResetTurn(SessionStatus session)
+    {
+        session.Tools.Clear();
+        session.WaitingMessage = null;
+        session.UnnamedTools = 0;
+    }
+
+    /// <summary>What a session in a turn shows now: a wait first, then a fresh failure, then the newest running tool.</summary>
+    private static PetAlert? Refresh(SessionStatus session, TimeSpan now)
+    {
+        bool was = session.Phase == PetPhase.Attention;
+        var waiting = session.Tools.Values.Where(t => t.Waiting is not null).OrderByDescending(t => t.Started)
+            .Select(t => t.Waiting).FirstOrDefault() ?? session.WaitingMessage;
+        if (waiting is not null)
+        {
+            bool warning = session.Warning;
+            Show(session, PetPhase.Attention, waiting, now, AttentionTimeout);
+            session.Warning = warning && now < session.WarningUntil;
+            return was ? null : new PetAlert(AlertKind.Attention, session.Project, waiting, now - session.TurnStarted);
+        }
+        if (session.Warning && now < session.WarningUntil)
+        {
+            Show(session, PetPhase.Working, session.WarningMessage, now, WorkingTimeout);
+            session.Warning = true;
+            return null;
+        }
+        Show(session, PetPhase.Working, WorkingMessage(session), now, WorkingTimeout);
+        return null;
+    }
+
+    private static string WorkingMessage(SessionStatus session) =>
+        session.Tools.Values.OrderByDescending(t => t.Started).Select(t => t.Message).FirstOrDefault() ?? "Claude düşünüyor";
 
     /// <summary>Moves timed phases forward. Returns true when anything visible changed.</summary>
     internal bool Advance(TimeSpan now)
@@ -196,7 +277,7 @@ internal sealed class PetState
                 session.Warning = false;
                 if (session.Phase == PetPhase.Working)
                 {
-                    session.Message = "Claude düşünüyor";
+                    session.Message = WorkingMessage(session);
                     changed = true;
                 }
             }
@@ -217,7 +298,13 @@ internal sealed class PetState
             session.Message = "";
             // A quiet working turn keeps its correlation in case a slow turn resumes.
             session.Phase = session.Phase == PetPhase.Complete ? PetPhase.Badge : PetPhase.Idle;
-            if (session.Phase == PetPhase.Idle && !session.InTurn) session.Prompt = null;
+            if (session.Phase == PetPhase.Idle)
+            {
+                // A timed-out wait or tool is stale; a later tool event starts fresh.
+                session.Tools.Clear();
+                session.WaitingMessage = null;
+                if (!session.InTurn) session.Prompt = null;
+            }
         }
         return changed;
     }

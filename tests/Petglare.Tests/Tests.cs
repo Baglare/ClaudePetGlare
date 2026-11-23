@@ -121,6 +121,59 @@ internal static class Tests
         Check(!removed.Contains("petglare") && removed.Contains("other.exe") && !removed.Contains("Notification"), "uninstall removes only ours");
         Directory.Delete(dir, true);
 
+        // Parallel tools in one session (tool_use_id)
+        var withId = Parse(new { hook_event_name = "PreToolUse", session_id = "s1", tool_name = "Bash", tool_use_id = "toolu_01ABC" });
+        Check(withId?.ToolUse == "toolu_01ABC" && withId.IsValid, "tool use id parsed");
+        Check(Parse(new { hook_event_name = "PreToolUse", session_id = "s1", tool_name = "Bash", tool_use_id = "bad id/../" })?.ToolUse is null,
+            "invalid tool use id dropped");
+        Check(Parse(new { hook_event_name = "PermissionRequest", session_id = "s1", tool_name = "Bash", tool_use_id = "toolu_9" }) is
+            { Event: HookEvent.Permission, Tool: ToolKind.Command, ToolUse: "toolu_9" }, "permission carries its tool");
+        Check(JsonSerializer.Deserialize<HookNotice>(JsonSerializer.SerializeToUtf8Bytes(withId!)) == withId, "tool use id survives the pipe");
+        HookNotice T(HookEvent e, ToolKind k, string? id) => new(e, "par", "p1", k, null, "P", id);
+        var par = new PetState();
+        var pt = TimeSpan.Zero;
+        par.Apply(new HookNotice(HookEvent.Prompt, "par", "p1", Project: "P"), pt);
+        par.Apply(T(HookEvent.Tool, ToolKind.Command, "a1"), pt += TimeSpan.FromSeconds(1));
+        par.Apply(T(HookEvent.Tool, ToolKind.Read, "b1"), pt += TimeSpan.FromSeconds(1));
+        par.Apply(T(HookEvent.ToolDone, ToolKind.Read, "b1"), pt += TimeSpan.FromSeconds(1));
+        Check(par.Focus?.Message == "Komut çalıştırılıyor", "finishing one tool keeps the other running: " + par.Focus?.Message);
+        par.Apply(T(HookEvent.Tool, ToolKind.Edit, "c1"), pt += TimeSpan.FromSeconds(1));
+        var parAlert = par.Apply(T(HookEvent.Permission, ToolKind.Edit, "c1"), pt += TimeSpan.FromSeconds(1));
+        par.Apply(T(HookEvent.ToolDone, ToolKind.Command, "a1"), pt += TimeSpan.FromSeconds(1));
+        Check(parAlert?.Kind == AlertKind.Attention && par.Focus is { Phase: PetPhase.Attention, Message: "Onay bekleniyor" },
+            "another tool finishing keeps a pending approval");
+        par.Apply(T(HookEvent.ToolFailed, ToolKind.Command, "zz"), pt += TimeSpan.FromSeconds(1));
+        Check(par.Focus?.Phase == PetPhase.Attention, "an unknown tool's failure keeps the approval");
+        par.Apply(T(HookEvent.ToolDone, ToolKind.Edit, "c1"), pt += TimeSpan.FromSeconds(5));
+        Check(par.Focus is { Phase: PetPhase.Working, Message: "Claude düşünüyor" }, "approved tool done -> thinking");
+        // Without ids (older Claude Code): results match the oldest running tool of their kind.
+        par.Apply(T(HookEvent.Tool, ToolKind.Command, null), pt += TimeSpan.FromSeconds(1));
+        par.Apply(T(HookEvent.Tool, ToolKind.Search, null), pt += TimeSpan.FromSeconds(1));
+        par.Apply(T(HookEvent.Permission, ToolKind.Command, null), pt += TimeSpan.FromSeconds(1));
+        par.Apply(T(HookEvent.ToolDone, ToolKind.Search, null), pt += TimeSpan.FromSeconds(1));
+        Check(par.Focus?.Phase == PetPhase.Attention, "without ids a different tool finishing keeps the approval");
+        par.Apply(T(HookEvent.ToolDone, ToolKind.Command, null), pt += TimeSpan.FromSeconds(1));
+        Check(par.Focus?.Phase == PetPhase.Working, "without ids the approved tool finishing clears it");
+        par.Apply(T(HookEvent.Tool, ToolKind.Question, "q9"), pt += TimeSpan.FromSeconds(1));
+        par.Apply(T(HookEvent.Tool, ToolKind.Read, "r9"), pt += TimeSpan.FromSeconds(1));
+        par.Apply(T(HookEvent.ToolDone, ToolKind.Read, "r9"), pt += TimeSpan.FromSeconds(1));
+        Check(par.Focus?.Message == "Sana soru soruyor", "an open question survives other tools");
+        par.Apply(new HookNotice(HookEvent.Stop, "par", "p1", Project: "P"), pt += TimeSpan.FromSeconds(1));
+        par.Apply(new HookNotice(HookEvent.Prompt, "par", "p2", Project: "P"), pt += TimeSpan.FromSeconds(1));
+        Check(par.Focus?.Message == "Claude düşünüyor" && par.Sessions.First().Tools.Count == 0, "a new turn starts with no tools");
+
+        // Picture safety: limits apply before pixels are decoded
+        Check(Throws(() => PetImage.CheckSize(20_000, 10)) && Throws(() => PetImage.CheckSize(8000, 8000))
+            && !Throws(() => PetImage.CheckSize(4000, 4000)), "picture size limits");
+        bool hugeRefused;
+        try { PetImage.Decode(new MemoryStream(PngHeader(30_000, 30_000))); hugeRefused = false; }
+        catch (InvalidDataException ex) { hugeRefused = ex.Message.Contains("büyük"); }
+        Check(hugeRefused, "a 30000×30000 PNG header is refused without decoding");
+        Check(Throws(() => PetImage.Decode(new MemoryStream(new byte[] { 1, 2, 3, 4, 5 }))), "garbage is refused");
+        var bigPng = new MemoryStream(EncodePng(SolidBitmap(3000, 1500)));
+        var scaledDown = PetImage.Decode(bigPng, PetImage.EditSide);
+        Check(scaledDown.PixelWidth == PetImage.EditSide, $"large picture decodes straight to edit size ({scaledDown.PixelWidth})");
+
         // Rendering, off screen
         var app = new Application();
         var w = new PetWindow();
@@ -249,6 +302,59 @@ internal static class Tests
         PetLibrary.Delete(imported.Id);
         Check(PetLibrary.List().Count == 1, "delete");
 
+        // Package limits: a small file that unpacks huge, and an oversized file
+        var bomb = Path.Combine(petRoot, "bomb" + PetLibrary.Extension);
+        using (var zip = System.IO.Compression.ZipFile.Open(bomb, System.IO.Compression.ZipArchiveMode.Create))
+        using (var entry = zip.CreateEntry(PetLibrary.ImageFile, System.IO.Compression.CompressionLevel.SmallestSize).Open())
+            entry.Write(new byte[PetLibrary.MaxImportBytes * 8]);
+        Check(new FileInfo(bomb).Length < PetLibrary.MaxPackageBytes && Throws(() => PetLibrary.Import(bomb)),
+            "a package that unpacks past the limit is refused");
+        var fat = Path.Combine(petRoot, "fat" + PetLibrary.Extension);
+        File.WriteAllBytes(fat, new byte[PetLibrary.MaxPackageBytes + 1]);
+        Check(Throws(() => PetLibrary.Import(fat)), "an oversized package file is refused");
+        var giant = Path.Combine(petRoot, "giant" + PetLibrary.Extension);
+        using (var zip = System.IO.Compression.ZipFile.Open(giant, System.IO.Compression.ZipArchiveMode.Create))
+        using (var entry = zip.CreateEntry(PetLibrary.ImageFile).Open())
+            entry.Write(PngHeader(30_000, 30_000));
+        Check(Throws(() => PetLibrary.Import(giant)) && PetLibrary.List().Count == 1, "a package claiming a giant picture is refused");
+
+        // A mask computed for an older state is never applied
+        var raceImage = PetImage.FromBitmap(SolidBitmap(64, 64));
+        long raceRevision = raceImage.Revision;
+        Check(WorkshopWindow.MaskStillFits(raceImage, raceImage, raceRevision), "unchanged picture accepts its mask");
+        raceImage.FlipHorizontal();
+        Check(!WorkshopWindow.MaskStillFits(raceImage, raceImage, raceRevision), "flip invalidates a running mask");
+        raceRevision = raceImage.Revision;
+        raceImage.RotateRight();
+        Check(!WorkshopWindow.MaskStillFits(raceImage, raceImage, raceRevision), "rotating a square picture invalidates it");
+        raceRevision = raceImage.Revision;
+        raceImage.Dab(10, 10, 4, 1, erase: true);
+        Check(!WorkshopWindow.MaskStillFits(raceImage, raceImage, raceRevision), "a brush stroke invalidates it");
+        raceRevision = raceImage.Revision;
+        var sameSize = PetImage.FromBitmap(SolidBitmap(64, 64));
+        Check(!WorkshopWindow.MaskStillFits(sameSize, raceImage, raceRevision), "a new picture of the same size invalidates it");
+        var snap = raceImage.Save();
+        raceRevision = raceImage.Revision;
+        raceImage.Restore(snap);
+        Check(!WorkshopWindow.MaskStillFits(raceImage, raceImage, raceRevision), "undo invalidates it");
+
+        // A bad model is detected and can be repaired
+        var realModel = BackgroundRemover.ModelPath;
+        var badModel = Path.Combine(petRoot, "u2netp.onnx");
+        BackgroundRemover.ModelPath = badModel;
+        Check(BackgroundRemover.Status() == BackgroundRemover.ModelStatus.Missing, "missing model");
+        File.WriteAllBytes(badModel, new byte[BackgroundRemover.ModelBytes]);
+        Check(BackgroundRemover.Status() == BackgroundRemover.ModelStatus.Corrupt, "right size but wrong checksum is corrupt");
+        bool refused;
+        try { BackgroundRemover.Predict(PetImage.FromBitmap(SolidBitmap(32, 32))); refused = false; }
+        catch (InvalidDataException) { refused = true; }
+        Check(refused, "a corrupt model is never loaded");
+        File.WriteAllBytes(badModel, new byte[100]);
+        Check(BackgroundRemover.Status() == BackgroundRemover.ModelStatus.Corrupt, "truncated model is corrupt");
+        BackgroundRemover.DeleteModel();
+        Check(!File.Exists(badModel) && BackgroundRemover.Status() == BackgroundRemover.ModelStatus.Missing, "repair removes the bad model");
+        BackgroundRemover.ModelPath = realModel;
+
         prefs.MaxBubbles = 2; prefs.SetBubbleScale(100); prefs.Mascot = savedPet.Key; prefs.Size = 100;
         apply.Invoke(w, null);
         Check(w.Pet.Custom.Visibility == Visibility.Visible && w.Pet.Vector.Visibility == Visibility.Collapsed,
@@ -293,6 +399,20 @@ internal static class Tests
         emptyWorkshop.Show();
         Check(emptyWorkshop.Empty.Visibility == Visibility.Visible && !emptyWorkshop.SaveButton.IsEnabled, "new workshop waits for a picture");
         emptyWorkshop.Close();
+
+        // Quitting with an unsaved Workshop: the mascot closes only if the Workshop does
+        var unsaved = new WorkshopWindow(null, _ => { }, prefs)
+        {
+            Left = -10000, Top = -10000, ShowActivated = false, ShowInTaskbar = false
+        };
+        unsaved.Show();
+        typeof(WorkshopWindow).GetMethod("Load", flags)!.Invoke(unsaved, [PetImage.FromBitmap(SamplePicture()), true]);
+        typeof(PetWindow).GetField("workshop", flags)!.SetValue(w, unsaved);
+        unsaved.Confirm = _ => false;
+        Check(unsaved.HasUnsavedChanges && !w.CloseWorkshop() && unsaved.IsVisible, "kept unsaved work stops the mascot from closing");
+        unsaved.Confirm = _ => true;
+        Check(w.CloseWorkshop() && !unsaved.IsVisible, "discarded work lets the mascot close");
+        typeof(PetWindow).GetField("workshop", flags)!.SetValue(w, null);
         Directory.Delete(petRoot, true);
 
         // Background model: only when a local copy is given (second argument) or already installed.
@@ -329,6 +449,57 @@ internal static class Tests
         bmp.Render(visual);
         bmp.Freeze();
         return bmp;
+    }
+
+    static BitmapSource SolidBitmap(int width, int height)
+    {
+        var pixels = new byte[width * height * 4];
+        for (int i = 0; i < pixels.Length; i += 4) { pixels[i] = 200; pixels[i + 1] = 120; pixels[i + 2] = 90; pixels[i + 3] = 255; }
+        var bmp = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, pixels, width * 4);
+        bmp.Freeze();
+        return bmp;
+    }
+
+    static byte[] EncodePng(BitmapSource bitmap)
+    {
+        var enc = new PngBitmapEncoder();
+        enc.Frames.Add(BitmapFrame.Create(bitmap));
+        using var ms = new MemoryStream();
+        enc.Save(ms);
+        return ms.ToArray();
+    }
+
+    /// <summary>A PNG whose header claims the given size but holds almost no data.</summary>
+    static byte[] PngHeader(int width, int height)
+    {
+        var ms = new MemoryStream();
+        ms.Write(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 });
+        void Chunk(string type, byte[] data)
+        {
+            var len = BitConverter.GetBytes(data.Length); Array.Reverse(len); ms.Write(len);
+            var body = System.Text.Encoding.ASCII.GetBytes(type).Concat(data).ToArray();
+            ms.Write(body);
+            var crc = BitConverter.GetBytes(Crc32(body)); Array.Reverse(crc); ms.Write(crc);
+        }
+        var ihdr = new byte[13];
+        var w = BitConverter.GetBytes(width); Array.Reverse(w); w.CopyTo(ihdr, 0);
+        var h = BitConverter.GetBytes(height); Array.Reverse(h); h.CopyTo(ihdr, 4);
+        ihdr[8] = 8; ihdr[9] = 6; // 8-bit RGBA
+        Chunk("IHDR", ihdr);
+        Chunk("IDAT", new byte[] { 0x78, 0x9C, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01 });
+        Chunk("IEND", Array.Empty<byte>());
+        return ms.ToArray();
+    }
+
+    static uint Crc32(byte[] data)
+    {
+        uint crc = 0xFFFFFFFF;
+        foreach (var b in data)
+        {
+            crc ^= b;
+            for (int k = 0; k < 8; k++) crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320 : crc >> 1;
+        }
+        return ~crc;
     }
 
     static bool Throws(Action action)

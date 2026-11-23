@@ -55,6 +55,7 @@ public partial class WorkshopWindow : Window
         this.look = look.Clone();
         this.look.Opacity = 100;
         this.look.Size = 100;
+        Confirm = AskYesNo;
         InitializeComponent();
         Picture.Stretch = Stretch.None;
         Result.Interactive = false;
@@ -242,11 +243,17 @@ public partial class WorkshopWindow : Window
     {
         try
         {
-            if (new FileInfo(path).Length > 64L * 1024 * 1024) throw new InvalidDataException("Dosya çok büyük.");
+            if (new FileInfo(path).Length > PetImage.MaxFileBytes) throw new InvalidDataException("Dosya çok büyük.");
             if (!ConfirmReplace()) return;
             Load(PetImage.FromFile(path), fresh: true);
             if (editing is null && PetName.Text == "Benim petim") PetName.Text = PetLibrary.CleanName(Path.GetFileNameWithoutExtension(path));
             ShowStatus("Görsel açıldı");
+        }
+        catch (InvalidDataException ex)
+        {
+            ShowStatus(ex.Message.Contains("büyük", StringComparison.Ordinal)
+                ? ex.Message + " En çok 40 megapiksel ve 64 MB."
+                : "Bu dosya görsel olarak açılamadı");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
                                        or FileFormatException or ArgumentException or InvalidOperationException)
@@ -273,15 +280,27 @@ public partial class WorkshopWindow : Window
             Load(PetImage.FromBitmap(pasted), fresh: true);
             ShowStatus("Görsel yapıştırıldı");
         }
+        catch (InvalidDataException ex)
+        {
+            ShowStatus(ex.Message);
+        }
         catch (Exception ex) when (ex is COMException or ExternalException or ArgumentException or NotSupportedException)
         {
             ShowStatus("Panodaki görsel okunamadı");
         }
     }
 
+    /// <summary>Asks a yes/no question; tests replace it so no dialog blocks them.</summary>
+    internal Func<string, bool> Confirm { get; set; }
+
+    private bool AskYesNo(string question) => MessageBox.Show(this, question, "Pet Workshop",
+        MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
+
+    /// <summary>True when nothing unsaved would be lost.</summary>
+    internal bool HasUnsavedChanges => dirty && image is not null;
+
     private bool ConfirmReplace() =>
-        image is null || !dirty || MessageBox.Show(this, "Mevcut düzenleme silinecek. Yeni görsel açılsın mı?", "Pet Workshop",
-            MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
+        !HasUnsavedChanges || Confirm("Mevcut düzenleme silinecek. Yeni görsel açılsın mı?");
 
     private void Load(PetImage picture, bool fresh)
     {
@@ -395,8 +414,7 @@ public partial class WorkshopWindow : Window
         PetName.TextChanged += (_, _) => { if (image is not null) { dirty = true; UpdateResult(); UpdateState(); } };
         Closing += (_, e) =>
         {
-            if (dirty && image is not null && MessageBox.Show(this, "Kaydedilmemiş değişiklikler kaybolacak. Kapatılsın mı?",
-                    "Pet Workshop", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+            if (HasUnsavedChanges && !Confirm("Kaydedilmemiş değişiklikler kaybolacak. Kapatılsın mı?"))
                 e.Cancel = true;
         };
     }

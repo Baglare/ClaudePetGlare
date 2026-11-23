@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -19,6 +20,15 @@ internal sealed class PetImage
     internal const int EditSide = 1024;
     /// <summary>Longest side of the saved pet.</summary>
     internal const int PetSide = 512;
+    /// <summary>Refused before decoding: larger pictures would need hundreds of MB of memory.</summary>
+    internal const long MaxPixels = 40_000_000;
+    internal const int MaxSide = 16_384;
+    internal const long MaxFileBytes = 64L * 1024 * 1024;
+
+    /// <summary>Goes up on every change, so a result computed for an older state can be recognised.</summary>
+    internal long Revision { get; private set; }
+
+    private void Touch() => Revision++;
 
     internal int Width { get; private set; }
     internal int Height { get; private set; }
@@ -42,6 +52,7 @@ internal sealed class PetImage
     /// <summary>Reads any picture WPF can decode, scaled so its longest side is at most <paramref name="maxSide"/>.</summary>
     internal static PetImage FromBitmap(BitmapSource source, int maxSide = EditSide)
     {
+        CheckSize(source.PixelWidth, source.PixelHeight);
         source = Fit(source, maxSide);
         var bgra = new FormatConvertedBitmap(source, PixelFormats.Bgra32, null, 0);
         int w = bgra.PixelWidth, h = bgra.PixelHeight;
@@ -53,32 +64,97 @@ internal sealed class PetImage
         return new PetImage(w, h, pixels, mask);
     }
 
-    internal static PetImage FromFile(string path, int maxSide = EditSide) => FromBitmap(Decode(path), maxSide);
+    internal static PetImage FromFile(string path, int maxSide = EditSide)
+    {
+        using var stream = OpenLimited(path);
+        return FromBitmap(Decode(stream, maxSide), maxSide);
+    }
+
+    /// <summary>Opens a picture file after checking its size on disk.</summary>
+    internal static FileStream OpenLimited(string path)
+    {
+        var stream = File.OpenRead(path);
+        if (stream.Length > MaxFileBytes)
+        {
+            stream.Dispose();
+            throw new InvalidDataException("Görsel dosyası çok büyük.");
+        }
+        return stream;
+    }
+
+    /// <summary>Rejects pictures whose size alone would exhaust memory.</summary>
+    internal static void CheckSize(int width, int height)
+    {
+        if (width <= 0 || height <= 0 || width > MaxSide || height > MaxSide || (long)width * height > MaxPixels)
+            throw new InvalidDataException($"Görsel çok büyük ({width}×{height}).");
+    }
 
     /// <summary>Restores a picture saved for editing: colours and mask as separate files.</summary>
     internal static PetImage FromParts(string sourcePath, string maskPath)
     {
-        var image = FromFile(sourcePath, int.MaxValue);
-        var mask = new FormatConvertedBitmap(Decode(maskPath), PixelFormats.Gray8, null, 0);
+        var image = FromFile(sourcePath, EditSide);
+        BitmapSource maskSource;
+        using (var stream = OpenLimited(maskPath)) maskSource = Decode(stream, EditSide);
+        var mask = new FormatConvertedBitmap(maskSource, PixelFormats.Gray8, null, 0);
         if (mask.PixelWidth != image.Width || mask.PixelHeight != image.Height) return image;
         mask.CopyPixels(image.Mask, image.Width, 0);
         return image;
     }
 
     /// <summary>Decodes fully into memory and closes the file, so it can be replaced later.</summary>
-    internal static BitmapSource Decode(string path)
+    internal static BitmapSource Decode(string path, int maxSide = int.MaxValue)
     {
-        using var stream = File.OpenRead(path);
-        return Decode(stream);
+        using var stream = OpenLimited(path);
+        return Decode(stream, maxSide);
     }
 
-    internal static BitmapSource Decode(Stream stream)
+    /// <summary>
+    /// Reads only the header first and refuses oversized pictures; a large picture is then
+    /// decoded straight to at most <paramref name="maxSide"/> (JPEG and others scale while decoding).
+    /// Only the first frame of an animated picture is used.
+    /// </summary>
+    internal static BitmapSource Decode(Stream stream, int maxSide = int.MaxValue)
     {
-        var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.PreservePixelFormat | BitmapCreateOptions.IgnoreColorProfile,
-            BitmapCacheOption.OnLoad);
-        var frame = decoder.Frames[0];
-        frame.Freeze();
-        return frame;
+        if (stream.CanSeek && stream.Length > MaxFileBytes) throw new InvalidDataException("Görsel dosyası çok büyük.");
+        long start = stream.CanSeek ? stream.Position : 0;
+        int width, height;
+        try
+        {
+            var header = BitmapDecoder.Create(stream, BitmapCreateOptions.DelayCreation | BitmapCreateOptions.IgnoreColorProfile,
+                BitmapCacheOption.None);
+            if (header.Frames.Count == 0) throw new InvalidDataException("Görselde kare yok.");
+            width = header.Frames[0].PixelWidth;
+            height = header.Frames[0].PixelHeight;
+        }
+        catch (Exception ex) when (ex is NotSupportedException or FileFormatException or ArgumentException
+                                       or InvalidOperationException or COMException or OverflowException)
+        {
+            throw new InvalidDataException("Görsel okunamadı.", ex);
+        }
+        CheckSize(width, height);
+        if (stream.CanSeek) stream.Position = start;
+
+        try
+        {
+            var image = new BitmapImage();
+            image.BeginInit();
+            image.CacheOption = BitmapCacheOption.OnLoad;
+            image.CreateOptions = BitmapCreateOptions.PreservePixelFormat | BitmapCreateOptions.IgnoreColorProfile;
+            image.StreamSource = stream;
+            if (Math.Max(width, height) > maxSide)
+            {
+                if (width >= height) image.DecodePixelWidth = maxSide;
+                else image.DecodePixelHeight = maxSide;
+            }
+            image.EndInit();
+            image.Freeze();
+            return image;
+        }
+        catch (Exception ex) when (ex is NotSupportedException or FileFormatException or ArgumentException
+                                       or InvalidOperationException or COMException or OverflowException)
+        {
+            throw new InvalidDataException("Görsel okunamadı.", ex);
+        }
     }
 
     private static BitmapSource Fit(BitmapSource source, int maxSide)
@@ -147,6 +223,7 @@ internal sealed class PetImage
 
     internal void Restore(Snapshot snapshot)
     {
+        Touch();
         Width = snapshot.Width;
         Height = snapshot.Height;
         Pixels = (byte[])snapshot.Pixels.Clone();
@@ -161,6 +238,7 @@ internal sealed class PetImage
     /// </summary>
     internal bool Dab(double cx, double cy, double radius, double hardness, bool erase)
     {
+        Touch();
         radius = Math.Max(0.5, radius);
         hardness = Math.Clamp(hardness, 0, 1);
         int x0 = Math.Max(0, (int)Math.Floor(cx - radius)), x1 = Math.Min(Width - 1, (int)Math.Ceiling(cx + radius));
@@ -221,6 +299,7 @@ internal sealed class PetImage
     internal int FloodErase(int x, int y, int tolerance, bool contiguous)
     {
         if (x < 0 || y < 0 || x >= Width || y >= Height) return 0;
+        Touch();
         int seed = y * Width + x, limit = Limit(tolerance), count = 0;
         if (!contiguous)
         {
@@ -238,6 +317,7 @@ internal sealed class PetImage
     /// </summary>
     internal int EdgeErase(int tolerance)
     {
+        Touch();
         int limit = Limit(tolerance);
         var edge = EdgeIndexes().ToArray();
         var colors = MainColors(edge);
@@ -298,6 +378,7 @@ internal sealed class PetImage
     {
         radius = Math.Clamp(radius, 0, 8);
         if (radius == 0) return;
+        Touch();
         var temp = new byte[Mask.Length];
         BlurPass(Mask, temp, radius, horizontal: true);
         BlurPass(temp, Mask, radius, horizontal: false);
@@ -324,6 +405,7 @@ internal sealed class PetImage
     /// <summary>Pulls the edge in by one pixel, which removes the coloured halo a removed background leaves.</summary>
     internal void Shrink()
     {
+        Touch();
         var copy = (byte[])Mask.Clone();
         for (int y = 0; y < Height; y++)
         for (int x = 0; x < Width; x++)
@@ -360,6 +442,7 @@ internal sealed class PetImage
         int x0 = Math.Clamp(rect.X, 0, Width - 1), y0 = Math.Clamp(rect.Y, 0, Height - 1);
         int w = Math.Clamp(rect.Width, 1, Width - x0), h = Math.Clamp(rect.Height, 1, Height - y0);
         if (w == Width && h == Height) return false;
+        Touch();
         var pixels = new byte[w * h * 4];
         var mask = new byte[w * h];
         for (int y = 0; y < h; y++)
@@ -382,6 +465,7 @@ internal sealed class PetImage
 
     internal void RotateRight()
     {
+        Touch();
         int w = Height, h = Width;
         var pixels = new byte[Pixels.Length];
         var mask = new byte[Mask.Length];
@@ -398,6 +482,7 @@ internal sealed class PetImage
 
     internal void FlipHorizontal()
     {
+        Touch();
         for (int y = 0; y < Height; y++)
         for (int x = 0; x < Width / 2; x++)
         {
@@ -411,6 +496,7 @@ internal sealed class PetImage
     internal void IntersectMask(byte[] mask)
     {
         if (mask.Length != Mask.Length) throw new ArgumentException("Maske boyutu uyuşmuyor.");
+        Touch();
         for (int i = 0; i < Mask.Length; i++) Mask[i] = (byte)(Mask[i] * mask[i] / 255);
     }
 }

@@ -22,9 +22,21 @@ public partial class WorkshopWindow
         Tools.Children.Add(aiButton);
     }
 
-    private static string AiLabel() => BackgroundRemover.ModelPresent
-        ? "Yapay zekâ ile sil (fotoğraf)"
-        : $"Yapay zekâ modelini indir ({BackgroundRemover.ModelBytes / 1024.0 / 1024.0:0.0} MB)";
+    private static string Megabytes => $"{BackgroundRemover.ModelBytes / 1024.0 / 1024.0:0.0} MB";
+
+    private static string AiLabel() => BackgroundRemover.Status() switch
+    {
+        BackgroundRemover.ModelStatus.Ready => "Yapay zekâ ile sil (fotoğraf)",
+        BackgroundRemover.ModelStatus.Corrupt => $"Bozuk modeli onar ({Megabytes})",
+        _ => $"Yapay zekâ modelini indir ({Megabytes})"
+    };
+
+    /// <summary>
+    /// A mask may be applied only to the very picture, in the very state, it was computed for:
+    /// same object (no new picture opened) and same revision (no edit, flip, rotation or undo since).
+    /// </summary>
+    internal static bool MaskStillFits(PetImage? current, PetImage source, long revision) =>
+        ReferenceEquals(current, source) && current.Revision == revision;
 
     private async Task AiClick()
     {
@@ -37,30 +49,35 @@ public partial class WorkshopWindow
         aiCancel = new CancellationTokenSource();
         try
         {
-            if (!BackgroundRemover.ModelPresent)
+            var status = BackgroundRemover.Status();
+            if (status != BackgroundRemover.ModelStatus.Ready)
             {
-                if (MessageBox.Show(this,
-                        $"Fotoğraf arka planını silmek için U²-Net modeli bir kez indirilecek.\n\n"
-                        + $"Dosya: u2netp.onnx ({BackgroundRemover.ModelBytes / 1024.0 / 1024.0:0.0} MB)\n"
+                var why = status == BackgroundRemover.ModelStatus.Corrupt
+                    ? "Kayıtlı model dosyası bozuk veya eksik (özeti tutmuyor). Silinip yeniden indirilecek.\n\n"
+                    : "Fotoğraf arka planını silmek için U²-Net modeli bir kez indirilecek.\n\n";
+                if (!Confirm(why
+                        + $"Dosya: u2netp.onnx ({Megabytes})\n"
                         + $"Kaynak: {BackgroundRemover.ModelSource} (Apache-2.0)\n\n"
-                        + "Model bilgisayarında çalışır; görsellerin hiçbir yere gönderilmez. İndirilsin mi?",
-                        "Pet Workshop", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+                        + "Model bilgisayarında çalışır; görsellerin hiçbir yere gönderilmez. İndirilsin mi?"))
                     return;
+                BackgroundRemover.DeleteModel();
                 aiButton.Content = "İndirmeyi durdur";
                 var progress = new Progress<double>(p => Status.Text = $"Model indiriliyor… %{p * 100:0}");
                 await BackgroundRemover.DownloadAsync(progress, aiCancel.Token);
                 ShowStatus("Model indirildi");
             }
 
+            var source = image;
+            long revision = image.Revision;
             var copy = image.Save();
             var working = new PetImage(copy.Width, copy.Height, copy.Pixels, copy.Mask);
             aiButton.Content = "Durdur";
             Status.Text = "Arka plan aranıyor…";
             var token = aiCancel.Token;
             var mask = await Task.Run(() => BackgroundRemover.Predict(working, token), token);
-            if (image.Width != copy.Width || image.Height != copy.Height)
+            if (!MaskStillFits(image, source, revision))
             {
-                ShowStatus("Görsel bu sırada değişti; tekrar dene");
+                ShowStatus("Görsel bu sırada değişti; maske uygulanmadı, tekrar dene");
                 return;
             }
             Apply(i => { i.IntersectMask(mask); return true; }, "Arka plan silindi; kalan kenarları fırçayla düzeltebilirsin");

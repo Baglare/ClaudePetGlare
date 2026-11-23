@@ -63,10 +63,10 @@ Boyut ve saydamlık sürgüyle tam istediğin değere ayarlanır; altındaki haz
 
 **Ayarlar → Şekil** satırındaki **+** karosu veya menüdeki **Pet Workshop…** bir görseli maskota çevirir.
 
-1. Görseli sürükle, **Ctrl+V** ile yapıştır veya **Görsel seç…** (PNG, JPG, BMP, GIF, WebP).
+1. Görseli sürükle, **Ctrl+V** ile yapıştır veya **Görsel seç…** (PNG, JPG, BMP, GIF, WebP). En çok 64 MB ve 40 megapiksel; büyük görseller açılırken 1024 piksele küçültülür.
 2. Arka planı sil:
    - **Kenardan sil**: düz renkli arka planlar için; **Renk toleransı** benzer tonları da alır.
-   - **Yapay zekâ ile sil**: fotoğraflar için. İlk kullanımda U²-Net modeli (`u2netp.onnx`, 4,4 MB, [rembg](https://github.com/danielgatis/rembg), Apache-2.0) senin onayınla bir kez indirilir ve sabit SHA-256 ile doğrulanır. Model bilgisayarında çalışır; görselin hiçbir yere gönderilmez.
+   - **Yapay zekâ ile sil**: fotoğraflar için. İlk kullanımda U²-Net modeli (`u2netp.onnx`, 4,4 MB, [rembg](https://github.com/danielgatis/rembg), Apache-2.0) senin onayınla bir kez indirilir ve sabit SHA-256 ile doğrulanır. Model bilgisayarında çalışır; görselin hiçbir yere gönderilmez. Model dosyası bozulursa düğme **Bozuk modeli onar** olur ve onayınla dosyayı silip yeniden indirir.
 3. İnce ayar: **Silgi** ve **Geri getir** fırçaları (boyut, sertlik; `[` `]`), tıklanan renk bölgesini silen **Sihirli değnek**, **Kırp**, **Kenarı daralt** (renk saçağını alır), **Kenarı yumuşat**, **Boşlukları kırp**, döndür ve çevir.
 4. Sağdaki ön izleme masaüstündeki görünümü gösterir. Ad verip **Kaydet**.
 

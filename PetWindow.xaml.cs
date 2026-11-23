@@ -112,6 +112,8 @@ public partial class PetWindow : Window
             CheckHooksAtStartup();
             PetLibrary.Changed += LibraryChanged;
         };
+        // An unsaved Workshop may refuse to close; then the mascot stays too, so nothing is left half shut.
+        Closing += (_, e) => { if (!CloseWorkshop()) e.Cancel = true; };
         Closed += async (_, _) =>
         {
             timer.Stop();
@@ -332,6 +334,14 @@ public partial class PetWindow : Window
     }
 
     private WorkshopWindow? workshop;
+
+    /// <summary>Closes the standalone Workshop first; false when the user kept unsaved work open.</summary>
+    internal bool CloseWorkshop()
+    {
+        if (workshop is null) return true;
+        workshop.Close();
+        return workshop is null || !workshop.IsVisible;
+    }
 
     /// <summary>An edited or deleted pet shows up (or falls back to the cat) right away.</summary>
     private void LibraryChanged() => Dispatcher.BeginInvoke(ApplyAppearance);

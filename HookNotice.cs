@@ -14,7 +14,7 @@ internal enum HookEvent
 internal enum ToolKind { Other, Read, Edit, Command, Search, Web, Agent, Question, Plan, Mcp }
 
 internal sealed record HookNotice(HookEvent Event, string Session, string? Prompt,
-    ToolKind Tool = ToolKind.Other, string? FileName = null, string? Project = null)
+    ToolKind Tool = ToolKind.Other, string? FileName = null, string? Project = null, string? ToolUse = null)
 {
     /// <summary>Claude Code hook events Petglare installs a handler for.</summary>
     internal static readonly (string Name, HookEvent Event)[] Events =
@@ -51,7 +51,7 @@ internal sealed record HookNotice(HookEvent Event, string Session, string? Promp
         var notice = new HookNotice(kind, session, Value(payload, "prompt_id"),
             Project: ProjectName(Value(payload, "cwd")));
 
-        if (kind is HookEvent.Tool or HookEvent.ToolDone or HookEvent.ToolFailed)
+        if (kind is HookEvent.Tool or HookEvent.ToolDone or HookEvent.ToolFailed or HookEvent.Permission)
         {
             var toolName = Value(payload, "tool_name");
             var tool = toolName switch
@@ -70,7 +70,9 @@ internal sealed record HookNotice(HookEvent Event, string Session, string? Promp
             string? file = null;
             if (tool is ToolKind.Read or ToolKind.Edit && payload.TryGetProperty("tool_input", out var input))
                 file = CleanName(Path.GetFileName(Value(input, "file_path") ?? Value(input, "notebook_path")), 52);
-            notice = notice with { Tool = tool, FileName = file };
+            // Parallel tools in one turn are told apart by their tool use id.
+            var toolUse = Value(payload, "tool_use_id");
+            notice = notice with { Tool = tool, FileName = file, ToolUse = ValidId(toolUse) ? toolUse : null };
         }
         return notice.IsValid ? notice : null;
     }
@@ -79,7 +81,9 @@ internal sealed record HookNotice(HookEvent Event, string Session, string? Promp
         && ValidId(Session) && (Prompt is null || ValidId(Prompt))
         && (FileName is null || (Event is HookEvent.Tool or HookEvent.ToolDone or HookEvent.ToolFailed
             && Tool is ToolKind.Read or ToolKind.Edit && FileName == CleanName(FileName, 52)))
-        && (Project is null || Project == CleanName(Project, 32));
+        && (Project is null || Project == CleanName(Project, 32))
+        && (ToolUse is null || (ValidId(ToolUse) && Event is HookEvent.Tool or HookEvent.ToolDone
+            or HookEvent.ToolFailed or HookEvent.Permission));
 
     /// <summary>The folder name of a working directory; a Claude worktree reports its repository.</summary>
     internal static string? ProjectName(string? cwd)

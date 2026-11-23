@@ -34,6 +34,9 @@ internal static class PetLibrary
     internal const string Format = "petglare-pet-v1";
     /// <summary>Limits for a pet file from someone else.</summary>
     internal const int MaxImportBytes = 2 * 1024 * 1024;
+    /// <summary>A .petglare file on disk; it holds one small picture and a short JSON.</summary>
+    internal const int MaxPackageBytes = MaxImportBytes + 64 * 1024;
+    internal const int MaxInfoBytes = 16 * 1024;
     internal const int MaxNameLength = 40;
 
     /// <summary>Where pets live; tests point this at a temporary folder.</summary>
@@ -141,57 +144,67 @@ internal static class PetLibrary
     /// </summary>
     internal static PetInfo Import(string path)
     {
-        if (new FileInfo(path).Length > MaxImportBytes * 2) throw new InvalidDataException("Dosya çok büyük.");
         string name = Path.GetFileNameWithoutExtension(path);
         byte[] png;
         if (Path.GetExtension(path).Equals(Extension, StringComparison.OrdinalIgnoreCase))
         {
-            using var zip = ZipFile.OpenRead(path);
-            if (zip.Entries.Count > 4) throw new InvalidDataException("Pet dosyasında beklenmeyen içerik var.");
-            var image = zip.GetEntry(ImageFile) ?? throw new InvalidDataException("Pet dosyasında pet.png yok.");
-            if (image.Length > MaxImportBytes) throw new InvalidDataException("Pet görseli çok büyük.");
-            png = ReadAll(image);
-            if (zip.GetEntry(InfoFile) is { Length: < 16 * 1024 } info)
+            if (new FileInfo(path).Length > MaxPackageBytes) throw new InvalidDataException("Pet dosyası çok büyük.");
+            try
             {
-                try
+                using var zip = ZipFile.OpenRead(path);
+                if (zip.Entries.Count > 4) throw new InvalidDataException("Pet dosyasında beklenmeyen içerik var.");
+                var image = zip.GetEntry(ImageFile) ?? throw new InvalidDataException("Pet dosyasında pet.png yok.");
+                // The sizes in the zip directory can lie, so reading also stops at the limit.
+                png = ReadLimited(image, MaxImportBytes);
+                if (zip.GetEntry(InfoFile) is { } info)
                 {
-                    var meta = JsonSerializer.Deserialize<Meta>(ReadAll(info));
-                    if (meta is { Format: Format }) name = meta.Name;
+                    try
+                    {
+                        var meta = JsonSerializer.Deserialize<Meta>(ReadLimited(info, MaxInfoBytes));
+                        if (meta is { Format: Format }) name = meta.Name;
+                    }
+                    catch (Exception ex) when (ex is JsonException or InvalidDataException) { }
                 }
-                catch (JsonException) { }
+            }
+            catch (Exception ex) when (ex is not InvalidDataException and (IOException or NotSupportedException or ArgumentException))
+            {
+                throw new InvalidDataException("Pet dosyası okunamadı.", ex);
             }
         }
         else
         {
+            if (new FileInfo(path).Length > MaxImportBytes) throw new InvalidDataException("Görsel çok büyük.");
             png = File.ReadAllBytes(path);
-            if (png.Length > MaxImportBytes) throw new InvalidDataException("Görsel çok büyük.");
         }
 
-        BitmapSource decoded;
-        try { decoded = PetImage.Decode(new MemoryStream(png)); }
-        catch (Exception ex) when (ex is NotSupportedException or FileFormatException or ArgumentException or InvalidOperationException)
-        {
-            throw new InvalidDataException("Görsel okunamadı.");
-        }
-        if (decoded.PixelWidth > 4096 || decoded.PixelHeight > 4096) throw new InvalidDataException("Görsel çok büyük.");
+        // Header first: size limits apply before any pixel is decoded.
+        var decoded = PetImage.Decode(new MemoryStream(png, writable: false), PetImage.EditSide);
         var picture = PetImage.FromBitmap(decoded, PetImage.EditSide);
         return Save(null, name, picture);
     }
 
-    private static byte[] ReadAll(ZipArchiveEntry entry)
+    /// <summary>Reads a zip entry but never more than <paramref name="limit"/> bytes, whatever its header claims.</summary>
+    internal static byte[] ReadLimited(ZipArchiveEntry entry, int limit)
     {
+        if (entry.Length > limit || entry.CompressedLength > limit) throw new InvalidDataException("Pet dosyasındaki içerik çok büyük.");
         using var stream = entry.Open();
         using var memory = new MemoryStream();
-        stream.CopyTo(memory);
+        var buffer = new byte[16 * 1024];
+        int read;
+        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            if (memory.Length + read > limit) throw new InvalidDataException("Pet dosyasındaki içerik çok büyük.");
+            memory.Write(buffer, 0, read);
+        }
         return memory.ToArray();
     }
 
     /// <summary>The finished picture, fully read so the file stays free; null if it is missing or broken.</summary>
     internal static BitmapSource? LoadImage(PetInfo pet)
     {
-        try { return PetImage.Decode(pet.ImagePath); }
+        try { return PetImage.Decode(pet.ImagePath, PetImage.EditSide); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
-                                       or FileFormatException or ArgumentException)
+                                       or FileFormatException or ArgumentException or InvalidDataException)
         {
             return null;
         }
@@ -206,7 +219,7 @@ internal static class PetLibrary
                 : PetImage.FromFile(pet.ImagePath);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
-                                       or FileFormatException or ArgumentException)
+                                       or FileFormatException or ArgumentException or InvalidDataException)
         {
             return null;
         }
