@@ -11,6 +11,46 @@ namespace Petglare;
 internal static class HookSettings
 {
     internal const string Marker = "petglare-v1";
+    private const string NotificationMatcher = "permission_prompt|elicitation_dialog";
+
+    internal sealed record Inspection(string Path, bool FileExists, string[] Missing,
+        string[] OtherExecutables, string? Error)
+    {
+        internal bool Installed => Error is null && Missing.Length == 0 && OtherExecutables.Length == 0;
+        internal bool Partial => Error is null && Missing.Length < HookNotice.Events.Length;
+    }
+
+    /// <summary>Reports which Petglare hooks Claude will run, without changing anything.</summary>
+    internal static Inspection Inspect(string? path = null)
+    {
+        path = System.IO.Path.GetFullPath(path ?? DefaultPath());
+        var all = HookNotice.Events.Select(e => e.Name).ToArray();
+        if (!File.Exists(path)) return new Inspection(path, false, all, [], null);
+        try
+        {
+            var hooks = JsonNode.Parse(File.ReadAllText(path))?["hooks"] as JsonObject;
+            var missing = new System.Collections.Generic.List<string>();
+            var others = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var current = Environment.ProcessPath ?? "";
+            foreach (var name in all)
+            {
+                var ours = (hooks?[name] as JsonArray ?? [])
+                    .OfType<JsonObject>().Select(g => g["hooks"]).OfType<JsonArray>()
+                    .SelectMany(h => h).Where(Ours).OfType<JsonObject>()
+                    .Select(h => (h["command"] as JsonValue)?.TryGetValue<string>(out var c) == true ? c : "")
+                    .ToList();
+                if (ours.Count == 0) { missing.Add(name); continue; }
+                foreach (var command in ours)
+                    if (!command.Equals(current, StringComparison.OrdinalIgnoreCase)) others.Add(command);
+            }
+            return new Inspection(path, true, missing.ToArray(), others.ToArray(), null);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException
+                                       or InvalidOperationException)
+        {
+            return new Inspection(path, true, all, [], ex.Message);
+        }
+    }
 
     internal static string DefaultPath()
     {
@@ -66,21 +106,24 @@ internal static class HookSettings
                         handlers.RemoveAt(i);
                         removed = true;
                     }
-                    if (removed && handlers.Count == 0 && group.Count == 1) groups.RemoveAt(index);
+                    if (removed && handlers.Count == 0
+                        && group.All(property => property.Key is "hooks" or "matcher"))
+                        groups.RemoveAt(index);
                 }
                 if (groupCount > 0 && groups.Count == 0 && !install) hooks.Remove(name);
             }
             if (install)
             {
                 if (hooks[name] is null) hooks[name] = new JsonArray();
-                hooks[name]!.AsArray().Add(new JsonObject
+                var group = new JsonObject();
+                // Idle reminders would only start a process that forwards nothing.
+                if (name == "Notification") group["matcher"] = NotificationMatcher;
+                group["hooks"] = new JsonArray(new JsonObject
                 {
-                    ["hooks"] = new JsonArray(new JsonObject
-                    {
-                        ["type"] = "command", ["command"] = executable,
-                        ["args"] = new JsonArray("--hook", Marker), ["timeout"] = 2
-                    })
+                    ["type"] = "command", ["command"] = executable,
+                    ["args"] = new JsonArray("--hook", Marker), ["timeout"] = 2
                 });
+                hooks[name]!.AsArray().Add(group);
             }
         }
 

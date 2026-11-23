@@ -12,14 +12,14 @@
       <Grid.RenderTransform>
         <TranslateTransform x:Name="BubbleOffset"/>
       </Grid.RenderTransform>
-      <Path Data="M 0,0 L 12,0 L 12,9 Z" Fill="#222642"
+      <Path x:Name="BubbleTail" Data="M 0,0 L 12,0 L 12,9 Z" Fill="#222642"
             HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,28,0">
         <Path.RenderTransform>
           <TranslateTransform x:Name="TailOffset"/>
         </Path.RenderTransform>
       </Path>
-      <Border Background="#222642" BorderBrush="#66658B" BorderThickness="1"
-              Margin="0,0,0,8" CornerRadius="15" MinWidth="53" Height="38" Padding="12,0">
+      <Border x:Name="BubbleBorder" Background="#222642" BorderBrush="#66658B" BorderThickness="1"
+              Margin="0,0,0,8" CornerRadius="15" MinWidth="53" MinHeight="38" Padding="12,4">
         <TextBlock x:Name="StatusText" VerticalAlignment="Center" TextAlignment="Center"
                    MaxWidth="218" FontFamily="Segoe UI" FontWeight="SemiBold"
                    FontSize="13" TextTrimming="CharacterEllipsis"/>
@@ -27,43 +27,44 @@
     </Grid>
 
     <Grid x:Name="Mascot" Width="89" Height="91" Margin="0,0,6,4" HorizontalAlignment="Right"
-          VerticalAlignment="Bottom" Background="Transparent">
+          VerticalAlignment="Bottom" Background="Transparent" ToolTipService.InitialShowDelay="600">
       <Grid.LayoutTransform>
         <ScaleTransform x:Name="MascotScale"/>
       </Grid.LayoutTransform>
       <Grid.RenderTransform>
         <TranslateTransform x:Name="MascotOffset"/>
       </Grid.RenderTransform>
-      <Grid.ContextMenu>
-        <ContextMenu>
-          <MenuItem x:Name="SparkMenu" Header="Tamamlanma parıltısını göster"
-                    IsCheckable="True" IsChecked="True" Click="ToggleSpark"/>
-          <MenuItem Header="Petglare’ı kapat" Click="ExitPet"/>
-        </ContextMenu>
-      </Grid.ContextMenu>
-      <Canvas Width="89" Height="91" Background="Transparent" Cursor="Hand"
+      <Canvas x:Name="MascotCanvas" Width="89" Height="91" Background="Transparent" Cursor="Hand"
               SnapsToDevicePixels="True" MouseLeftButtonDown="StartDrag"
-              MouseLeftButtonUp="EndDrag" MouseMove="Drag" LostMouseCapture="FinishDrag">
+              MouseLeftButtonUp="EndDrag" MouseMove="Drag" LostMouseCapture="FinishDrag"
+              MouseRightButtonUp="MascotMenu">
         <Ellipse Width="68" Height="12" Canvas.Left="10" Canvas.Top="78" Fill="#4321263C"/>
-        <Path Data="M 10,47 C 7,36 10,17 15,8 C 17,3 21,3 26,8 L 36,19
+        <Path x:Name="Body" Data="M 10,47 C 7,36 10,17 15,8 C 17,3 21,3 26,8 L 36,19
                     Q 46,16 55,20 L 68,7 Q 75,1 78,10 Q 83,24 78,44
                     C 87,63 77,82 58,86 L 31,86 C 10,84 2,66 10,47 Z"
               Fill="#C9BDFF" Stroke="#2D284C" StrokeThickness="2.5" StrokeLineJoin="Round"/>
-        <Path Data="M 16,29 Q 15,18 20,12 L 30,22 Z M 61,22 L 73,12 Q 77,20 73,30 Z"
+        <Path x:Name="Ears" Data="M 16,29 Q 15,18 20,12 L 30,22 Z M 61,22 L 73,12 Q 77,20 73,30 Z"
               Fill="#E995BA"/>
         <Path Data="M 15,55 C 15,40 29,31 44,31 C 61,31 76,41 76,56
                     C 76,69 64,76 44,76 C 26,76 15,69 15,55 Z" Fill="#292641"/>
         <Path Data="M 23,67 Q 45,77 69,66 Q 62,74 45,74 Q 29,74 23,67 Z" Fill="#3E385F"/>
-        <Ellipse Width="10" Height="15" Canvas.Left="29" Canvas.Top="44" Fill="#A9F4D8"/>
-        <Ellipse Width="10" Height="15" Canvas.Left="53" Canvas.Top="44" Fill="#A9F4D8"/>
+        <Ellipse x:Name="LeftEye" Width="10" Height="15" Canvas.Left="29" Canvas.Top="44" Fill="#A9F4D8"/>
+        <Ellipse x:Name="RightEye" Width="10" Height="15" Canvas.Left="53" Canvas.Top="44" Fill="#A9F4D8"/>
         <Path Data="M 41,61 Q 45,66 50,61" Stroke="#F2ECFF" StrokeThickness="1.6"
               StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-        <Path Data="M 20,59 L 24,59 M 68,59 L 72,59" Stroke="#E995BA"
+        <Path x:Name="Cheeks" Data="M 20,59 L 24,59 M 68,59 L 72,59" Stroke="#E995BA"
               StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
         <Path x:Name="DoneSpark" Visibility="Collapsed" IsHitTestVisible="False"
               Data="M 75,60 Q 76,71 87,72 Q 76,73 75,84 Q 74,74 63,72 Q 74,71 75,60 Z"
               Fill="#A9F4D8" Stroke="#254737" StrokeThickness="1.5" StrokeLineJoin="Round"/>
       </Canvas>
+      <Border x:Name="SessionBadge" Visibility="Collapsed" IsHitTestVisible="False"
+              HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="2,0,0,14"
+              MinWidth="20" Height="20" CornerRadius="10" Padding="5,0"
+              Background="#292641" BorderBrush="#C9BDFF" BorderThickness="1.5">
+        <TextBlock x:Name="SessionCount" Foreground="#F5F1FF" FontFamily="Segoe UI" FontWeight="Bold"
+                   FontSize="11" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      </Border>
       <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
                   VerticalAlignment="Top" Margin="0,3,0,0">
         <StackPanel.Style>
