@@ -51,7 +51,7 @@ internal sealed record HookNotice(HookEvent Event, string Session, string? Promp
         var notice = new HookNotice(kind, session, Value(payload, "prompt_id"),
             Project: ProjectName(Value(payload, "cwd")));
 
-        if (kind is HookEvent.Tool or HookEvent.ToolDone or HookEvent.ToolFailed or HookEvent.Permission)
+        if (CarriesTool(kind))
         {
             var toolName = Value(payload, "tool_name");
             var tool = toolName switch
@@ -79,11 +79,14 @@ internal sealed record HookNotice(HookEvent Event, string Session, string? Promp
 
     internal bool IsValid => Enum.IsDefined(Event) && Enum.IsDefined(Tool)
         && ValidId(Session) && (Prompt is null || ValidId(Prompt))
-        && (FileName is null || (Event is HookEvent.Tool or HookEvent.ToolDone or HookEvent.ToolFailed
-            && Tool is ToolKind.Read or ToolKind.Edit && FileName == CleanName(FileName, 52)))
+        && (FileName is null || (CarriesTool(Event) && Tool is ToolKind.Read or ToolKind.Edit
+            && FileName == CleanName(FileName, 52)))
         && (Project is null || Project == CleanName(Project, 32))
-        && (ToolUse is null || (ValidId(ToolUse) && Event is HookEvent.Tool or HookEvent.ToolDone
-            or HookEvent.ToolFailed or HookEvent.Permission));
+        && (ToolUse is null || (ValidId(ToolUse) && CarriesTool(Event)));
+
+    /// <summary>Events about one tool call: they may name its kind, file and tool use id.</summary>
+    internal static bool CarriesTool(HookEvent value) =>
+        value is HookEvent.Tool or HookEvent.ToolDone or HookEvent.ToolFailed or HookEvent.Permission;
 
     /// <summary>The folder name of a working directory; a Claude worktree reports its repository.</summary>
     internal static string? ProjectName(string? cwd)

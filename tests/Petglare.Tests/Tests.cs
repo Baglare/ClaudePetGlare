@@ -165,6 +165,48 @@ internal static class Tests
         par.Apply(new HookNotice(HookEvent.Prompt, "par", "p2", Project: "P"), pt += TimeSpan.FromSeconds(1));
         Check(par.Focus?.Message == "Claude düşünüyor" && par.Sessions.First().Tools.Count == 0, "a new turn starts with no tools");
 
+        // Permission events naming a file are forwarded, not dropped
+        var editPermission = Parse(new { hook_event_name = "PermissionRequest", session_id = "s1", tool_name = "Edit",
+            tool_use_id = "toolu_e1", tool_input = new { file_path = @"C:\Proje\App.cs" } });
+        Check(editPermission is { Event: HookEvent.Permission, Tool: ToolKind.Edit, FileName: "App.cs", ToolUse: "toolu_e1" }
+            && editPermission.IsValid, "edit permission with a file name is valid");
+        var readPermission = Parse(new { hook_event_name = "PermissionRequest", session_id = "s1", tool_name = "Read",
+            tool_input = new { file_path = @"C:\Proje\notlar.md" } });
+        Check(readPermission is { Event: HookEvent.Permission, Tool: ToolKind.Read, FileName: "notlar.md" }, "read permission with a file name is valid");
+        Check(JsonSerializer.Deserialize<HookNotice>(JsonSerializer.SerializeToUtf8Bytes(editPermission!)) is { IsValid: true } back
+            && back == editPermission, "file permission survives the pipe");
+        Check(!(new HookNotice(HookEvent.Stop, "s1", null, ToolKind.Edit, "App.cs").IsValid), "a file name on a non-tool event stays invalid");
+
+        // A permission is never pinned on an unrelated tool, and survives other tools finishing
+        HookNotice U(HookEvent e, ToolKind k, string? id) => new(e, "unk", "p1", k, null, "U", id);
+        var unk = new PetState();
+        var ut = TimeSpan.Zero;
+        unk.Apply(new HookNotice(HookEvent.Prompt, "unk", "p1", Project: "U"), ut);
+        unk.Apply(U(HookEvent.Tool, ToolKind.Command, "a1"), ut += TimeSpan.FromSeconds(1));
+        unk.Apply(U(HookEvent.Permission, ToolKind.Edit, "ghost"), ut += TimeSpan.FromSeconds(1));
+        var unkSession = unk.Sessions.First();
+        Check(unkSession.Tools["a1"].Waiting is null && unk.Focus?.Phase == PetPhase.Attention,
+            "a permission with an unknown id is not pinned on another tool");
+        unk.Apply(U(HookEvent.ToolDone, ToolKind.Command, "a1"), ut += TimeSpan.FromSeconds(1));
+        Check(unk.Focus is { Phase: PetPhase.Attention, Message: "Onay bekleniyor" }, "another tool finishing keeps the unknown tool's approval");
+        unk.Apply(U(HookEvent.ToolDone, ToolKind.Edit, "other"), ut += TimeSpan.FromSeconds(1));
+        Check(unk.Focus?.Phase == PetPhase.Attention, "a result with a different unknown id keeps it too");
+        unk.Apply(U(HookEvent.ToolDone, ToolKind.Edit, "ghost"), ut += TimeSpan.FromSeconds(1));
+        Check(unk.Focus?.Phase == PetPhase.Working && unkSession.Waits.Count == 0, "its own result ends the approval");
+        // Without ids: only a running tool of the same kind may take the permission
+        unk.Apply(U(HookEvent.Tool, ToolKind.Command, null), ut += TimeSpan.FromSeconds(1));
+        unk.Apply(U(HookEvent.Permission, ToolKind.Edit, null), ut += TimeSpan.FromSeconds(1));
+        Check(unkSession.Tools.Values.All(t => t.Waiting is null) && unkSession.Waits.Count == 1,
+            "an edit permission is not pinned on a running command");
+        unk.Apply(U(HookEvent.ToolDone, ToolKind.Command, null), ut += TimeSpan.FromSeconds(1));
+        Check(unk.Focus?.Phase == PetPhase.Attention, "the command finishing keeps the edit approval");
+        unk.Apply(U(HookEvent.Tool, ToolKind.Read, null), ut += TimeSpan.FromSeconds(1));
+        Check(unk.Focus?.Phase == PetPhase.Attention, "a new tool starting keeps a pending permission");
+        unk.Apply(U(HookEvent.ToolDone, ToolKind.Edit, null), ut += TimeSpan.FromSeconds(1));
+        Check(unk.Focus is { Phase: PetPhase.Working } && unkSession.Waits.Count == 0, "the edit result ends it");
+        unk.Apply(U(HookEvent.Permission, ToolKind.Other, null), ut += TimeSpan.FromSeconds(1));
+        Check(unkSession.Tools.Values.All(t => t.Waiting is null), "an unnamed permission is not pinned on the running read");
+
         // Picture safety: limits apply before pixels are decoded
         Check(Throws(() => PetImage.CheckSize(20_000, 10)) && Throws(() => PetImage.CheckSize(8000, 8000))
             && !Throws(() => PetImage.CheckSize(4000, 4000)), "picture size limits");

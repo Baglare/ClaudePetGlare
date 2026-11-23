@@ -25,6 +25,12 @@ internal sealed class RunningTool
     internal string? Waiting { get; set; }
 }
 
+/// <summary>
+/// A wait for the user that no tracked tool accounts for: a permission for a tool Petglare did
+/// not see start (by id when Claude sends one, otherwise by kind), or a bare notification.
+/// </summary>
+internal sealed record PendingWait(string? ToolUse, ToolKind Kind, string Message, bool FromNotification);
+
 /// <summary>The live status of one Claude Code session.</summary>
 internal sealed class SessionStatus
 {
@@ -45,8 +51,8 @@ internal sealed class SessionStatus
     internal string WarningMessage { get; set; } = "";
     /// <summary>Tools running in parallel, by tool use id; one finishing leaves the others.</summary>
     internal Dictionary<string, RunningTool> Tools { get; } = new(StringComparer.Ordinal);
-    /// <summary>A wait for the user that no running tool accounts for.</summary>
-    internal string? WaitingMessage { get; set; }
+    /// <summary>Waits no running tool accounts for, oldest first.</summary>
+    internal List<PendingWait> Waits { get; } = new();
     internal int UnnamedTools { get; set; }
 
     internal string Title => Project ?? $"Oturum {Id[..Math.Min(6, Id.Length)]}";
@@ -163,8 +169,8 @@ internal sealed class PetState
         {
             case HookEvent.Tool:
             {
-                // Claude moved on, so a wait that no tool accounts for is over.
-                session.WaitingMessage = null;
+                // Claude moved on, so a bare notification is answered; permissions stay until their tool reports.
+                session.Waits.RemoveAll(w => w.FromNotification);
                 var id = notice.ToolUse ?? $"#{++session.UnnamedTools}";
                 var tool = new RunningTool(id, notice.Tool, ToolMessage(notice), now);
                 if (notice.Tool is ToolKind.Question or ToolKind.Plan)
@@ -175,8 +181,8 @@ internal sealed class PetState
             case HookEvent.ToolDone or HookEvent.ToolFailed:
             {
                 if (FindTool(session, notice) is { } done) session.Tools.Remove(done.Id);
-                // A result for a tool Petglare never saw start (it started mid-turn) ends a wait no tool accounts for.
-                else session.WaitingMessage = null;
+                // A result for a tool Petglare never saw start ends only that tool's own wait.
+                else if (FindWait(session, notice) is { } wait) session.Waits.Remove(wait);
                 if (notice.Event == HookEvent.ToolFailed)
                 {
                     session.Warning = true;
@@ -187,19 +193,22 @@ internal sealed class PetState
             }
             case HookEvent.Permission:
             {
-                var tool = notice.ToolUse is { } id && session.Tools.TryGetValue(id, out var exact) ? exact
-                    : session.Tools.Values.Where(t => t.Waiting is null)
-                        .OrderBy(t => t.Kind == notice.Tool && notice.Tool != ToolKind.Other ? 0 : 1)
-                        .ThenByDescending(t => t.Started).FirstOrDefault();
+                // With an id, only that tool; without one, only a running tool of the same kind
+                // (the oldest, as results arrive in start order). Never an unrelated tool.
+                RunningTool? tool = notice.ToolUse is { } id
+                    ? session.Tools.GetValueOrDefault(id)
+                    : notice.Tool == ToolKind.Other ? null
+                    : session.Tools.Values.Where(t => t.Waiting is null && t.Kind == notice.Tool)
+                        .OrderBy(t => t.Started).FirstOrDefault();
                 if (tool is not null) tool.Waiting = "Onay bekleniyor";
-                else session.WaitingMessage = "Onay bekleniyor";
+                else session.Waits.Add(new PendingWait(notice.ToolUse, notice.Tool, "Onay bekleniyor", false));
                 return Refresh(session, now);
             }
             case HookEvent.Attention:
             {
                 // A permission prompt or question notification repeats a wait that is already shown.
-                if (session.Tools.Values.Any(t => t.Waiting is not null) || session.WaitingMessage is not null) return null;
-                session.WaitingMessage = "Yanıtını bekliyor";
+                if (session.Tools.Values.Any(t => t.Waiting is not null) || session.Waits.Count > 0) return null;
+                session.Waits.Add(new PendingWait(null, ToolKind.Other, "Yanıtını bekliyor", true));
                 return Refresh(session, now);
             }
             case HookEvent.Stop:
@@ -229,14 +238,18 @@ internal sealed class PetState
     private static RunningTool? FindTool(SessionStatus session, HookNotice notice)
     {
         if (notice.ToolUse is { } id) return session.Tools.GetValueOrDefault(id);
-        return session.Tools.Values.Where(t => t.Kind == notice.Tool).OrderBy(t => t.Started).FirstOrDefault()
-               ?? (session.Tools.Count == 1 ? session.Tools.Values.First() : null);
+        return session.Tools.Values.Where(t => t.Kind == notice.Tool).OrderBy(t => t.Started).FirstOrDefault();
     }
+
+    /// <summary>The untracked wait a result ends: same tool use id, or without ids the oldest of the same kind.</summary>
+    private static PendingWait? FindWait(SessionStatus session, HookNotice notice) => notice.ToolUse is { } id
+        ? session.Waits.FirstOrDefault(w => w.ToolUse == id)
+        : session.Waits.FirstOrDefault(w => !w.FromNotification && w.ToolUse is null && w.Kind == notice.Tool);
 
     private static void ResetTurn(SessionStatus session)
     {
         session.Tools.Clear();
-        session.WaitingMessage = null;
+        session.Waits.Clear();
         session.UnnamedTools = 0;
     }
 
@@ -245,7 +258,7 @@ internal sealed class PetState
     {
         bool was = session.Phase == PetPhase.Attention;
         var waiting = session.Tools.Values.Where(t => t.Waiting is not null).OrderByDescending(t => t.Started)
-            .Select(t => t.Waiting).FirstOrDefault() ?? session.WaitingMessage;
+            .Select(t => t.Waiting).FirstOrDefault() ?? session.Waits.LastOrDefault()?.Message;
         if (waiting is not null)
         {
             bool warning = session.Warning;
@@ -302,7 +315,7 @@ internal sealed class PetState
             {
                 // A timed-out wait or tool is stale; a later tool event starts fresh.
                 session.Tools.Clear();
-                session.WaitingMessage = null;
+                session.Waits.Clear();
                 if (!session.InTurn) session.Prompt = null;
             }
         }
