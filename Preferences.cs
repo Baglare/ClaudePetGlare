@@ -40,6 +40,10 @@ internal sealed class Preferences
 
     // Notifications
     public bool ShowToasts { get; set; } = true;
+
+    // Workshop
+    /// <summary>Off by default: Petglare contacts the Workshop catalog only after the user turns this on.</summary>
+    public bool WorkshopOnline { get; set; }
     public bool NotifyAttention { get; set; } = true;
     public bool NotifyComplete { get; set; } = true;
     public bool NotifyError { get; set; } = true;

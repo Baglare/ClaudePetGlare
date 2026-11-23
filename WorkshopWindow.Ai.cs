@@ -14,9 +14,37 @@ public partial class WorkshopWindow
     private Button? aiButton;
     private CancellationTokenSource? aiCancel;
     private bool highQuality;
+    private BackgroundModel aiModel = BackgroundRemover.Small;
 
     partial void AddAutoTools()
     {
+        if (BackgroundRemover.Models.Count > 1)
+        {
+            // One choice per model; each is downloaded only when first used.
+            var choices = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
+            string group = NewGroup();
+            foreach (var model in BackgroundRemover.Models)
+            {
+                var option = new RadioButton
+                {
+                    Content = model.Title, GroupName = group, IsChecked = model == aiModel, Style = StyleOf("Segment"),
+                    Padding = new Thickness(10, 4, 10, 4), FontSize = 12, Margin = new Thickness(0, 0, 4, 4),
+                    ToolTip = $"{model.Summary} · {model.Megabytes}"
+                };
+                option.Checked += (_, _) =>
+                {
+                    aiModel = model;
+                    if (aiButton is not null && aiCancel is null) aiButton.Content = AiLabel();
+                };
+                choices.Children.Add(option);
+            }
+            Tools.Children.Add(new Border
+            {
+                Background = (System.Windows.Media.Brush)FindResource("Canvas"), CornerRadius = new CornerRadius(10),
+                Padding = new Thickness(3, 3, 0, 0), Margin = new Thickness(0, 4, 0, 6), Child = choices,
+                HorizontalAlignment = HorizontalAlignment.Left
+            });
+        }
         aiButton = SmallButton(AiLabel(), async (_, _) => await AiClick());
         aiButton.ToolTip = "Fotoğraflarda konuyu bulur ve arka planı siler. Bilgisayarında çalışır; görsel hiçbir yere gönderilmez.";
         needsPicture.Add(aiButton);
@@ -32,13 +60,11 @@ public partial class WorkshopWindow
         Tools.Children.Add(quality);
     }
 
-    private static string Megabytes => $"{BackgroundRemover.ModelBytes / 1024.0 / 1024.0:0.0} MB";
-
-    private static string AiLabel() => BackgroundRemover.Status() switch
+    private string AiLabel() => BackgroundRemover.Status(aiModel) switch
     {
         BackgroundRemover.ModelStatus.Ready => "Yapay zekâ ile sil (fotoğraf)",
-        BackgroundRemover.ModelStatus.Corrupt => $"Bozuk modeli onar ({Megabytes})",
-        _ => $"Yapay zekâ modelini indir ({Megabytes})"
+        BackgroundRemover.ModelStatus.Corrupt => $"Bozuk modeli onar ({aiModel.Megabytes})",
+        _ => $"Yapay zekâ modelini indir ({aiModel.Megabytes})"
     };
 
     /// <summary>
@@ -59,21 +85,22 @@ public partial class WorkshopWindow
         aiCancel = new CancellationTokenSource();
         try
         {
-            var status = BackgroundRemover.Status();
+            var model = aiModel;
+            var status = BackgroundRemover.Status(model);
             if (status != BackgroundRemover.ModelStatus.Ready)
             {
                 var why = status == BackgroundRemover.ModelStatus.Corrupt
                     ? "Kayıtlı model dosyası bozuk veya eksik (özeti tutmuyor). Silinip yeniden indirilecek.\n\n"
-                    : "Fotoğraf arka planını silmek için U²-Net modeli bir kez indirilecek.\n\n";
+                    : $"Fotoğraf arka planını silmek için {model.Summary} modeli bir kez indirilecek.\n\n";
                 if (!Confirm(why
-                        + $"Dosya: u2netp.onnx ({Megabytes})\n"
-                        + $"Kaynak: {BackgroundRemover.ModelSource} (Apache-2.0)\n\n"
+                        + $"Dosya: {model.File} ({model.Megabytes})\n"
+                        + $"Kaynak: {BackgroundModel.Source} (Apache-2.0)\n\n"
                         + "Model bilgisayarında çalışır; görsellerin hiçbir yere gönderilmez. İndirilsin mi?"))
                     return;
-                BackgroundRemover.DeleteModel();
+                BackgroundRemover.DeleteModel(model);
                 aiButton.Content = "İndirmeyi durdur";
                 var progress = new Progress<double>(p => Status.Text = $"Model indiriliyor… %{p * 100:0}");
-                await BackgroundRemover.DownloadAsync(progress, aiCancel.Token);
+                await BackgroundRemover.DownloadAsync(model, progress, aiCancel.Token);
                 ShowStatus("Model indirildi");
             }
 
@@ -84,7 +111,7 @@ public partial class WorkshopWindow
             Status.Text = highQuality ? "Arka plan aranıyor (yüksek kalite, 4 yön)…" : "Arka plan aranıyor…";
             var token = aiCancel.Token;
             bool quality = highQuality;
-            var mask = await Task.Run(() => BackgroundRemover.Predict(working, token, quality), token);
+            var mask = await Task.Run(() => BackgroundRemover.Predict(working, token, quality, model), token);
             if (!MaskStillFits(image, source, revision))
             {
                 ShowStatus("Görsel bu sırada değişti; maske uygulanmadı, tekrar dene");

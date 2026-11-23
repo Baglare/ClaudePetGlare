@@ -24,30 +24,33 @@ internal static class Bench
         public readonly int[] CountByTurn = new int[4];
     }
 
-    internal static int Run(string model, string mascotPath, string outDir)
+    /// <param name="modelFolder">Folder holding the model files (u2netp.onnx, silueta.onnx, isnet-general-use.onnx); missing ones are skipped.</param>
+    internal static int Run(string modelFolder, string mascotPath, string outDir)
     {
-        BackgroundRemover.ModelPath = model;
-        if (BackgroundRemover.Status() != BackgroundRemover.ModelStatus.Ready)
-        {
-            Console.WriteLine("Model not ready: " + model);
-            return 1;
-        }
+        BackgroundRemover.ModelFolder = modelFolder;
         Directory.CreateDirectory(outDir);
         var mascot = new FormatConvertedBitmap(PetImage.Decode(mascotPath, 1024), System.Windows.Media.PixelFormats.Bgra32, null, 0);
         var backgrounds = Directory.EnumerateFiles(@"C:\Windows\Web", "*.jpg", SearchOption.AllDirectories)
             .Where(p => !p.Contains("touchkeyboard", StringComparison.OrdinalIgnoreCase)).OrderBy(p => p).Take(8).ToList();
         var shapes = new[] { (900, 600), (600, 900), (720, 720) };
 
-        var methods = new List<Method>
+        var methods = new List<Method>();
+        var stretch = BackgroundRemover.Fit.Stretch;
+        var mean = BackgroundRemover.Merge.Mean;
+        foreach (var model in new[] { BackgroundRemover.Small, BackgroundRemover.Silueta, BackgroundRemover.IsNet })
         {
-            new("Hızlı · esnetme (mevcut)", i => BackgroundRemover.Probability(i.Pixels, i.Width, i.Height, BackgroundRemover.Fit.Stretch)),
-            new("Hızlı · oran korumalı", i => BackgroundRemover.Probability(i.Pixels, i.Width, i.Height, BackgroundRemover.Fit.Letterbox)),
-            new("YK · esnetme · ortalama", i => BackgroundRemover.Combine(i, BackgroundRemover.Fit.Stretch, BackgroundRemover.Merge.Mean)),
-            new("YK · esnetme · en büyük", i => BackgroundRemover.Combine(i, BackgroundRemover.Fit.Stretch, BackgroundRemover.Merge.Max)),
-            new("YK · oran korumalı · ortalama", i => BackgroundRemover.Combine(i, BackgroundRemover.Fit.Letterbox, BackgroundRemover.Merge.Mean)),
-        };
+            if (BackgroundRemover.Status(model) != BackgroundRemover.ModelStatus.Ready)
+            {
+                Console.WriteLine($"Skipped {model.Id}: not present or corrupt");
+                continue;
+            }
+            methods.Add(new($"{model.Summary} · tek yön", i => BackgroundRemover.Probability(i.Pixels, i.Width, i.Height, stretch, default, model)));
+            if (model != BackgroundRemover.IsNet)
+                methods.Add(new($"{model.Summary} · 4 yön", i => BackgroundRemover.Combine(i, stretch, mean, default, model)));
+        }
+        if (methods.Count == 0) return 1;
         var scores = methods.ToDictionary(m => m.Name, _ => new Score());
-        BackgroundRemover.Probability(new byte[4 * 16], 4, 4, BackgroundRemover.Fit.Stretch); // warm up
+        foreach (var method in methods) method.Run(new PetImage(4, 4, new byte[64], new byte[16])); // warm up
 
         int samples = 0;
         foreach (var bgPath in backgrounds)

@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -605,11 +607,84 @@ internal static class Tests
         Check(previewPicture.Mask.All(m => m == 255), "undo brings the background back");
         preview.Confirm = _ => true;
         preview.Close();
+
+        // v1.2 online Workshop: off by default; everything read is checked
+        Check(!new Preferences().WorkshopOnline, "the Workshop is offline by default");
+        var catPng = EncodePng(SolidBitmap(64, 48));
+        var catSha = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(catPng));
+        string Entry(string id, string? path = null, long? bytes = null, string? sha = null, int w = 64, string name = "Mor kedi") =>
+            JsonSerializer.Serialize(new { id, name, author = "Baglare", created = "2026-11-24T00:00:00+00:00",
+                path = path ?? $"pets/{id}/pet.png", bytes = bytes ?? catPng.Length, width = w, height = 48, sha256 = sha ?? catSha });
+        var catalogJson = "{\"format\":\"petglare-catalog-v1\",\"pets\":[" + string.Join(",",
+            Entry("mor-kedi-1"), Entry("../evil"), Entry("yol-2", path: "pets/baska/pet.png"), Entry("buyuk-3", bytes: 400_000),
+            Entry("hash-4", sha: "abc"), Entry("mor-kedi-1"), Entry("genis-5", w: 2000), Entry("tamam-6", name: "‮Ters\u0007"),
+            Entry("bozuk-7")) + "]}";
+        var parsed = WorkshopCatalog.Parse(System.Text.Encoding.UTF8.GetBytes(catalogJson));
+        Check(parsed.Select(p => p.Id).SequenceEqual(new[] { "mor-kedi-1", "tamam-6", "bozuk-7" }),
+            "catalog keeps valid entries only: " + string.Join(",", parsed.Select(p => p.Id)));
+        Check(parsed.First(p => p.Id == "tamam-6").Name == "Ters", "catalog names are cleaned of control and bidi characters");
+        Check(Throws(() => WorkshopCatalog.Parse("{\"format\":\"baska\",\"pets\":[]}"u8.ToArray())), "an unknown catalog format is refused");
+
+        var fake = new FakeWeb();
+        fake.Pages["index.json"] = System.Text.Encoding.UTF8.GetBytes(catalogJson);
+        fake.Pages["pets/mor-kedi-1/pet.png"] = catPng;
+        fake.Pages["pets/tamam-6/pet.png"] = catPng;
+        var tampered = (byte[])catPng.Clone();
+        tampered[^20] ^= 0xFF;
+        fake.Pages["pets/bozuk-7/pet.png"] = tampered;
+        WorkshopCatalog.Handler = fake;
+        WorkshopCatalog.BaseUrl = "https://catalog.test/";
+        var loaded = WorkshopCatalog.LoadAsync(default).GetAwaiter().GetResult();
+        Check(loaded.Count == 3 && fake.Requests.Single() == "https://catalog.test/index.json", "catalog loads from the configured address only");
+        bool tamperRefused;
+        try { WorkshopCatalog.DownloadAsync(loaded.First(p => p.Id == "bozuk-7"), default).GetAwaiter().GetResult(); tamperRefused = false; }
+        catch (InvalidDataException) { tamperRefused = true; }
+        Check(tamperRefused, "a picture that does not match its checksum is refused");
+        var installedPet = WorkshopCatalog.InstallAsync(loaded.First(p => p.Id == "mor-kedi-1"), null, default).GetAwaiter().GetResult();
+        Check(installedPet.Origin == "workshop:mor-kedi-1" && installedPet.Name == "Mor kedi" && WorkshopCatalog.Installed().Contains("mor-kedi-1"),
+            "a catalog pet is added with its origin");
+        Check(PetLibrary.Find(installedPet.Id)?.Origin == "workshop:mor-kedi-1", "origin survives reloading");
+        fake.Pages["index.json"] = new byte[WorkshopCatalog.MaxIndexBytes + 10];
+        Check(Throws(() => WorkshopCatalog.LoadAsync(default).GetAwaiter().GetResult()), "an oversized catalog is refused");
+        fake.HideLength = true;
+        Check(Throws(() => WorkshopCatalog.LoadAsync(default).GetAwaiter().GetResult()), "an oversized catalog without a length is refused while reading");
+        fake.HideLength = false;
+        fake.Pages["index.json"] = System.Text.Encoding.UTF8.GetBytes(catalogJson);
+
+        var catalogWindow = new CatalogWindow { Left = -10000, Top = -10000, ShowActivated = false, ShowInTaskbar = false };
+        catalogWindow.Show();
+        catalogWindow.LoadAsync().GetAwaiter().GetResult();
+        for (int spin = 0; spin < 20; spin++)
+            System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+        Check(catalogWindow.Shown == 3, "the catalog window lists the valid pets");
+        catalogWindow.UpdateLayout();
+        var cContent = (FrameworkElement)catalogWindow.Content;
+        var cHost = new Border { Background = catalogWindow.Background, Child = null };
+        var cbmp = new RenderTargetBitmap((int)catalogWindow.ActualWidth, (int)catalogWindow.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+        var cVisual = new DrawingVisual();
+        using (var dc = cVisual.RenderOpen())
+        {
+            dc.DrawRectangle(catalogWindow.Background, null, new Rect(0, 0, catalogWindow.ActualWidth, catalogWindow.ActualHeight));
+            dc.DrawRectangle(new VisualBrush(cContent), null, new Rect(0, 0, cContent.ActualWidth, cContent.ActualHeight));
+        }
+        cbmp.Render(cVisual);
+        var cenc = new PngBitmapEncoder(); cenc.Frames.Add(BitmapFrame.Create(cbmp));
+        using (var fs = File.Create(Path.Combine(outDir, "c1-catalog.png"))) cenc.Save(fs);
+        catalogWindow.Close();
+        WorkshopCatalog.Handler = null;
+
+        var submitUrl = WorkshopCatalog.SubmitUrl("Mor & Kedi");
+        Check(submitUrl.StartsWith("https://github.com/Baglare/Petglare-Workshop/issues/new?template=pet.yml", StringComparison.Ordinal)
+              && submitUrl.Contains("pet-name=Mor%20%26%20Kedi"), "the send form address is built and escaped");
+        var outbox = Path.Combine(petRoot, "outbox");
+        var prepared = WorkshopCatalog.PrepareSubmission(installedPet with { Name = "Mor/Kedi:1" }, outbox);
+        Check(File.Exists(prepared) && Path.GetDirectoryName(prepared) == outbox && Path.GetFileName(prepared) == "MorKedi1.png",
+            "the picture to send is prepared under a safe name");
         Directory.Delete(petRoot, true);
 
         // Background model: only when a local copy is given (second argument) or already installed.
         if (args.Length > 1) BackgroundRemover.ModelPath = args[1];
-        if (BackgroundRemover.ModelPresent)
+        if (BackgroundRemover.Status() == BackgroundRemover.ModelStatus.Ready)
         {
             var aiPicture = PetImage.FromBitmap(SamplePicture());
             var aiMask = BackgroundRemover.Predict(aiPicture);
@@ -731,6 +806,34 @@ internal static class Tests
             for (int k = 0; k < 8; k++) crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320 : crc >> 1;
         }
         return ~crc;
+    }
+
+    /// <summary>Serves fixed bytes per path instead of the network, and records what was asked.</summary>
+    sealed class FakeWeb : System.Net.Http.HttpMessageHandler
+    {
+        public readonly Dictionary<string, byte[]> Pages = new();
+        public readonly List<string> Requests = new();
+        public bool HideLength;
+
+        protected override Task<System.Net.Http.HttpResponseMessage> SendAsync(System.Net.Http.HttpRequestMessage request,
+            System.Threading.CancellationToken cancel)
+        {
+            var url = request.RequestUri!.ToString();
+            Requests.Add(url);
+            var path = request.RequestUri.AbsolutePath.TrimStart('/');
+            if (!Pages.TryGetValue(path, out var body))
+                return Task.FromResult(new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
+            System.Net.Http.HttpContent content = HideLength
+                ? new System.Net.Http.StreamContent(new UnknownLength(body))
+                : new System.Net.Http.ByteArrayContent(body);
+            return Task.FromResult(new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = content });
+        }
+
+        /// <summary>A stream that does not tell its length, like a chunked response.</summary>
+        sealed class UnknownLength(byte[] data) : MemoryStream(data)
+        {
+            public override bool CanSeek => false;
+        }
     }
 
     static bool Throws(Action action)
