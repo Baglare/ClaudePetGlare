@@ -8,4 +8,10 @@
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- The headless test project compiles these sources itself. -->
+    <Compile Remove="tests\**" />
+    <Page Remove="tests\**" />
+    <None Remove="tests\**" />
+  </ItemGroup>
 </Project>
