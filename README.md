@@ -18,7 +18,8 @@ Kurulum, Claude’un kullanıcı ayarlarına yazar (`CLAUDE_CONFIG_DIR` tanıml�
 
 - **Sol tık** Claude Desktop’ı açar. **Sürükleme** konumu değiştirir; ekran kenarına yakın bırakınca kenara yaslanır.
 - Maskotun üzerine gelince beliren **− / +** düğmeleri boyutu %80 ile %150 arasında değiştirir.
-- **Sağ tık** (maskotta veya bildirim alanındaki simgede) bütün ayarların bulunduğu menüyü açar.
+- **Sağ tık** (maskotta veya bildirim alanındaki simgede) kısa bir menü açar: oturum listesi, **Ayarlar…**, Claude Desktop’ı aç, maskotu gizle, bağlantı teşhisi ve kapat.
+- **Ayarlar** penceresinde bütün kalıcı seçenekler tek yerde durur. Soldaki önizleme masaüstündeki maskotla aynı çizimi kullanır; çalışırken, onay, bitti, parıltı ve çoklu sohbet hallerine bakabilirsin. Değişiklikler **Uygula**’ya basınca masaüstündeki maskota geçer ve kaydedilir; **Kapat** uygulanmamış değişiklikleri bırakır.
 - Bildirim alanındaki simgeye **sol tık** maskotu gizler veya geri getirir. Simgedeki renkli nokta genel durumu gösterir: mavi çalışıyor, sarı senden bir şey bekliyor, kırmızı hata, yeşil bitti.
 - Petglare zaten açıkken `Petglare.exe` dosyasını tekrar çalıştırmak gizli maskotu geri getirir.
 
@@ -37,17 +38,22 @@ Balon, `VoxForge · Program.cs düzenleniyor` gibi önce projeyi, sonra yapılan
 
 ### Birden fazla oturum
 
-Petglare bütün Claude oturumlarını ayrı ayrı izler. Balon en önemli oturumu gösterir: senden bir şey bekleyen oturum hatadan, hata çalışan oturumdan, çalışan oturum bitmiş olandan önce gelir; eşitlikte en son hareket eden kazanır. Aynı anda iki veya daha fazla oturum çalışıyorsa maskotun köşesinde sayı görünür. Bütün oturumların listesi menünün en üstünde ve maskotun ipucunda yer alır.
+Petglare bütün Claude oturumlarını ayrı ayrı izler ve her sohbet için ayrı bir balon gösterir; balonlar alt alta dizilir (Ayarlar’dan 1–3 arası). En önemli sohbet maskota en yakın durur: senden bir şey bekleyen sohbet hatadan, hata çalışan sohbetten, çalışan sohbet bitmiş olandan önce gelir; eşitlikte en son hareket eden kazanır. Balonların boyutu Küçük, Normal veya Büyük olabilir. Aynı anda iki veya daha fazla oturum çalışıyorsa maskotun köşesinde sayı görünür. Bütün oturumların listesi menünün en üstünde ve maskotun ipucunda yer alır.
+
+Bir yanıt bitince kalan parıltı, Claude Desktop penceresine geçtiğinde veya maskota tıklayıp Claude’u açtığında kaybolur. Claude Desktop hangi sohbetin açık olduğunu dışarıya bildirmediği için Petglare, Claude penceresine bakmayı sohbetleri görmüş sayar.
 
 ### Bildirimler
 
 Menüdeki **Bildirimler** bölümünden Windows bildirimini ve kısa sesi ayrı ayrı açıp kapatabilirsin. Bildirim; Claude onay veya yanıt beklediğinde, on saniyeden uzun süren bir yanıt bittiğinde ve hata olduğunda gelir. **Claude öndeyken sessiz kal** açıkken Claude Desktop penceresine bakıyorsan bildirim gönderilmez. Bildirime tıklamak Claude Desktop’ı açar.
 
-### Görünüm ve konum
+### Görünüm ve ekranda kalma
 
-- **Görünüm**: üç maskot (Kedi, Damla, Hayalet), beş renk, dört balon stili, saydamlık, yazı boyutu, proje adını ve tamamlanma yıldızını gösterme.
-- **Konum**: kenara yaslanma, tam ekran uygulamalarda (oyun, video, sunum) aynı ekrandaysa gizlenme, sağ alt köşeye veya başka bir ekrana taşıma. Bir monitör çıkarılırsa maskot görünen bir ekrana geçer, monitör geri gelince eski yerine döner.
-- **Windows açılırken başlat** Petglare’ı kullanıcı oturumu açıldığında başlatır (`HKCU\…\Run`). EXE’yi taşırsan bu seçeneği yeniden işaretle.
+- **Maskot**: üç şekil (Kedi, Damla, Hayalet), beş renk, boyut ve saydamlık.
+- **Balonlar**: dört stil, üç boyut, aynı anda gösterilen sohbet sayısı, proje adı ve tamamlanma parıltısı.
+- **Her zaman en üstte**: maskotu her saniye yeniden en üste koyar; kenarlıksız pencere modundaki oyunların üstünde de kalır. Özel (exclusive) tam ekran modundaki oyunların üstüne Windows hiçbir pencereyi çizdirmez; o oyunlarda görüntü ayarından kenarlıksız pencereyi seç.
+- **Tam ekranda gizle**: aynı ekranda tam ekran bir uygulama açıkken maskotu saklar. Kapatırsan maskot oyunun, videonun veya sunumun üstünde kalır.
+- **Sol tık**: *Açık*, *Tam ekranda kapalı* veya *Kapalı*. Kapalıyken sol tık Claude’u açmaz, maskotu taşımaz ve − / + düğmeleri görünmez; sağ tık menüsü her zaman çalışır. Oyun oynarken yanlışlıkla tıklamaya karşı *Tam ekranda kapalı* seçeneği uygundur.
+- **Ekran kenarlarına yasla**, **Windows açılırken başlat** (`HKCU\…\Run`; EXE’yi taşırsan yeniden aç) ve **Sağ alt köşeye taşı**. Bir monitör çıkarılırsa maskot görünen bir ekrana geçer, monitör geri gelince eski yerine döner.
 
 ### Bağlantı teşhisi
 

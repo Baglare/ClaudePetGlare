@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Media;
@@ -9,7 +10,6 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
-using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -29,8 +29,8 @@ public partial class PetWindow : Window
     private const int MouseActivate = 0x0021;
     private const int DoNotActivate = 3;
     private const uint MoveOnlyWithoutActivation = 0x0001 | 0x0004 | 0x0010;
-    private const double BaseHeight = 143;
-    private const int DefaultSize = 100;
+    private const uint RaiseWithoutActivation = 0x0001 | 0x0002 | 0x0010 | 0x0200;
+    private static readonly IntPtr TopMost = new(-1);
     private const int SnapDistance = 24;
     private const int SnapGap = 6;
     private static readonly TimeSpan LongTurn = TimeSpan.FromSeconds(10);
@@ -49,10 +49,11 @@ public partial class PetWindow : Window
     private Point? dragOffset;
     private Point pressPoint;
     private bool dragging;
-    private int mascotSize = DefaultSize;
     private Point? savedAnchor;
+    private bool fullScreenActive;
     private bool fullScreenHidden;
     private DiagnosticsWindow? diagnostics;
+    private SettingsWindow? settings;
 
     // Connection diagnostics
     private bool listening;
@@ -62,7 +63,7 @@ public partial class PetWindow : Window
     private int noticeCount;
     private TaskCompletionSource<bool>? ping;
 
-    // A short message from Petglare itself, shown while no session needs the bubble.
+    // A short message from Petglare itself, shown while no session needs a bubble.
     private string? systemMessage;
     private bool systemWarning;
     private TimeSpan systemUntil;
@@ -71,13 +72,29 @@ public partial class PetWindow : Window
     {
         this.showSignal = showSignal;
         InitializeComponent();
+
+        var canvas = Pet.MascotCanvas;
+        canvas.MouseLeftButtonDown += StartDrag;
+        canvas.MouseLeftButtonUp += EndDrag;
+        canvas.MouseMove += Drag;
+        canvas.LostMouseCapture += FinishDrag;
+        canvas.MouseRightButtonUp += MascotMenu;
+        Pet.ShrinkRequested += () => ResizeMascot(-10);
+        Pet.EnlargeRequested += () => ResizeMascot(10);
+
         timer.Tick += (_, _) =>
         {
             bool expired = systemMessage is not null && clock.Elapsed >= systemUntil;
             if (expired) systemMessage = null;
             if (state.Advance(clock.Elapsed) || expired) RenderStatus();
         };
-        watcher.Tick += (_, _) => CheckFullScreen();
+        watcher.Tick += (_, _) =>
+        {
+            CheckFullScreen();
+            KeepOnTop();
+            // Looking at Claude counts as having seen the finished chats.
+            if (state.ShowBadge && ClaudeIsForeground() && state.ClearFinished()) RenderStatus();
+        };
         Loaded += (_, _) =>
         {
             ApplyAppearance();
@@ -101,6 +118,7 @@ public partial class PetWindow : Window
             SystemEvents.DisplaySettingsChanged -= DisplayChanged;
             showWait?.Unregister(null);
             diagnostics?.Close();
+            settings?.Close();
             tray.Dispose();
             closing.Cancel();
             if (listener is not null) await listener;
@@ -195,29 +213,29 @@ public partial class PetWindow : Window
             _ => false
         };
         if (!wanted || (prefs.QuietWhenClaudeFocused && ClaudeIsForeground())) return;
-
-        if (prefs.ShowToasts)
-        {
-            var title = alert.Project is null ? "Claude" : $"Claude · {alert.Project}";
-            var text = alert.Kind == AlertKind.Complete && alert.TurnLength >= TimeSpan.FromMinutes(1)
+        Notify(prefs, tray, alert.Kind, alert.Project is null ? "Claude" : $"Claude · {alert.Project}",
+            alert.Kind == AlertKind.Complete && alert.TurnLength >= TimeSpan.FromMinutes(1)
                 ? $"{alert.Message} ({(int)alert.TurnLength.TotalMinutes} dk sürdü)"
-                : alert.Message;
-            tray.Notify(title, text, alert.Kind switch
+                : alert.Message);
+    }
+
+    /// <summary>Shows a Windows notification and/or plays a short sound, as the user chose.</summary>
+    private static void Notify(Preferences prefs, TrayIcon tray, AlertKind kind, string title, string text)
+    {
+        if (prefs.ShowToasts)
+            tray.Notify(title, text, kind switch
             {
                 AlertKind.Error => Forms.ToolTipIcon.Error,
                 AlertKind.Attention => Forms.ToolTipIcon.Warning,
                 _ => Forms.ToolTipIcon.Info
             });
-        }
         if (prefs.PlaySound)
-        {
-            (alert.Kind switch
+            (kind switch
             {
                 AlertKind.Attention => SystemSounds.Exclamation,
                 AlertKind.Error => SystemSounds.Hand,
                 _ => SystemSounds.Asterisk
             }).Play();
-        }
     }
 
     private static bool ClaudeIsForeground()
@@ -242,62 +260,28 @@ public partial class PetWindow : Window
         RenderStatus();
     }
 
+    internal static BubbleModel ToBubble(SessionStatus session) => new(session.Project, session.Message,
+        session.Phase switch
+        {
+            PetPhase.Complete => BubbleTone.Done,
+            PetPhase.Error => BubbleTone.Error,
+            PetPhase.Attention => BubbleTone.Attention,
+            _ when session.Warning => BubbleTone.Warning,
+            _ => BubbleTone.Normal
+        });
+
     private void RenderStatus()
     {
-        var style = Appearance.Bubble(prefs.Bubble);
-        var focus = state.Focus;
-        StatusText.Inlines.Clear();
-        StatusText.FontSize = prefs.FontSize;
-
-        var border = style.Border;
-        if (focus is not null)
-        {
-            bool complete = focus.Phase == PetPhase.Complete;
-            var color = focus.Phase switch
-            {
-                PetPhase.Complete => style.Done,
-                PetPhase.Error => style.Error,
-                PetPhase.Attention => style.Warning,
-                _ when focus.Warning => style.Warning,
-                _ => style.Text
-            };
-            if (prefs.ShowProject && focus.Project is not null)
-            {
-                StatusText.Inlines.Add(new Run(focus.Project)
-                    { Foreground = Appearance.Brush(style.Dim), FontWeight = FontWeights.Normal });
-                StatusText.Inlines.Add(new Run(complete ? "  " : " · ")
-                    { Foreground = Appearance.Brush(style.Dim), FontWeight = FontWeights.Normal });
-            }
-            StatusText.Inlines.Add(new Run(focus.Message)
-            {
-                Foreground = Appearance.Brush(color),
-                FontSize = complete ? 22 : prefs.FontSize,
-                BaselineAlignment = BaselineAlignment.Center
-            });
-            if (focus.Phase == PetPhase.Attention) border = style.Warning;
-            else if (focus.Phase == PetPhase.Error) border = style.Error;
-        }
-        else if (systemMessage is not null)
-        {
-            StatusText.Inlines.Add(new Run(systemMessage)
-                { Foreground = Appearance.Brush(systemWarning ? style.Warning : style.Text) });
-        }
-
-        Bubble.Visibility = focus is not null || systemMessage is not null ? Visibility.Visible : Visibility.Collapsed;
-        BubbleBorder.Background = BubbleTail.Fill = Appearance.Brush(style.Background);
-        BubbleBorder.BorderBrush = Appearance.Brush(border);
-        DoneSpark.Visibility = state.ShowBadge && focus is null && prefs.ShowSpark != false
-            ? Visibility.Visible : Visibility.Collapsed;
-
-        int active = state.ActiveCount;
-        SessionBadge.Visibility = active >= 2 ? Visibility.Visible : Visibility.Collapsed;
-        SessionCount.Text = active.ToString();
-        SessionBadge.ToolTip = $"{active} oturum çalışıyor";
+        var speaking = state.Speaking;
+        var bubbles = new List<BubbleModel>(speaking.Select(ToBubble));
+        if (bubbles.Count == 0 && systemMessage is not null)
+            bubbles.Add(new BubbleModel(null, systemMessage, systemWarning ? BubbleTone.Warning : BubbleTone.Normal));
+        Pet.Render(prefs, bubbles, state.ShowBadge, state.ActiveCount);
 
         var summary = SessionSummary();
-        MascotCanvas.ToolTip = summary;
+        Pet.MascotCanvas.ToolTip = summary;
         tray.SetText(summary);
-        tray.Update(MascotCanvas, focus?.Phase switch
+        tray.Update(Pet.MascotCanvas, speaking.FirstOrDefault()?.Phase switch
         {
             PetPhase.Attention => Color.FromRgb(0xFF, 0xC4, 0x3D),
             PetPhase.Error => Color.FromRgb(0xFF, 0x6B, 0x7A),
@@ -321,17 +305,38 @@ public partial class PetWindow : Window
 
     private void ApplyAppearance()
     {
-        var shape = Appearance.Shape(prefs.Mascot);
-        var palette = Appearance.Colors(prefs.Palette);
-        Body.Data = Geometry.Parse(shape.Body);
-        Body.Fill = Appearance.Brush(palette.Body);
-        Body.Stroke = Appearance.Brush(palette.Outline);
-        Ears.Visibility = shape.Ears ? Visibility.Visible : Visibility.Collapsed;
-        Ears.Fill = Cheeks.Stroke = Appearance.Brush(palette.Accent);
-        LeftEye.Fill = RightEye.Fill = Appearance.Brush(palette.Eyes);
-        SessionBadge.BorderBrush = Appearance.Brush(palette.Body);
-        Opacity = Math.Clamp(prefs.Opacity, 30, 100) / 100.0;
+        Pet.ApplyLook(prefs);
+        Topmost = prefs.AlwaysOnTop;
+        Pet.Interactive = !LeftClickLocked;
         RenderStatus();
+    }
+
+    // ───────────────────────────── Settings ─────────────────────────────
+
+    private void OpenSettings()
+    {
+        if (settings is { IsLoaded: true })
+        {
+            settings.Activate();
+            return;
+        }
+        settings = new SettingsWindow(prefs, ApplySettings,
+            sample => Notify(sample, tray, AlertKind.Complete, "Claude · Petglare", "Bildirimler böyle görünür."),
+            MoveToCorner);
+        settings.Closed += (_, _) => settings = null;
+        settings.Show();
+        settings.Activate();
+    }
+
+    /// <summary>Adopts settings chosen in the settings window, keeping the mascot where it stands.</summary>
+    private void ApplySettings(Preferences chosen)
+    {
+        Relayout(() => prefs.CopySettingsFrom(chosen));
+        ApplyAppearance();
+        SavePreferences();
+        prefs.Save();
+        CheckFullScreen();
+        KeepOnTop();
     }
 
     // ───────────────────────────── Menu and tray ─────────────────────────────
@@ -354,7 +359,7 @@ public partial class PetWindow : Window
     {
         var menu = BuildMenu();
         menu.Placement = PlacementMode.MousePoint;
-        if (!fromTray) menu.PlacementTarget = MascotCanvas;
+        if (!fromTray) menu.PlacementTarget = Pet.MascotCanvas;
         // A menu opened from the notification area closes on an outside click
         // only when its window is in the foreground.
         menu.Opened += (_, _) =>
@@ -364,19 +369,19 @@ public partial class PetWindow : Window
         menu.IsOpen = true;
     }
 
+    /// <summary>A short menu: the chats, then the few things done often. Everything else lives in Settings.</summary>
     private ContextMenu BuildMenu()
     {
         var menu = new ContextMenu();
         var sessions = OrderedSessions();
 
-        var header = new MenuItem
+        menu.Items.Add(new MenuItem
         {
             Header = sessions.Length == 0 ? "Henüz Claude oturumu yok"
                 : $"{sessions.Length} oturum · {state.ActiveCount} çalışıyor",
             IsEnabled = false
-        };
-        menu.Items.Add(header);
-        foreach (var session in sessions.Take(8))
+        });
+        foreach (var session in sessions.Take(6))
         {
             var age = DiagnosticsWindow.Ago(clock.Elapsed - session.LastEvent);
             menu.Items.Add(new MenuItem
@@ -387,87 +392,13 @@ public partial class PetWindow : Window
             });
         }
         menu.Items.Add(new Separator());
-
+        menu.Items.Add(Item("Ayarlar…", OpenSettings));
         menu.Items.Add(Item("Claude Desktop’ı aç", OpenClaude));
         menu.Items.Add(Item(prefs.Hidden ? "Maskotu göster" : "Maskotu gizle", () => SetHidden(!prefs.Hidden)));
-        menu.Items.Add(new Separator());
-
-        var notify = new MenuItem { Header = "Bildirimler" };
-        notify.Items.Add(Check("Windows bildirimi göster", prefs.ShowToasts, v => prefs.ShowToasts = v));
-        notify.Items.Add(Check("Kısa ses çal", prefs.PlaySound, v => prefs.PlaySound = v));
-        notify.Items.Add(new Separator());
-        notify.Items.Add(Check("Onay veya yanıt beklediğinde", prefs.NotifyAttention, v => prefs.NotifyAttention = v));
-        notify.Items.Add(Check("Uzun bir yanıt bittiğinde", prefs.NotifyComplete, v => prefs.NotifyComplete = v));
-        notify.Items.Add(Check("Hata olduğunda", prefs.NotifyError, v => prefs.NotifyError = v));
-        notify.Items.Add(new Separator());
-        notify.Items.Add(Check("Claude öndeyken sessiz kal", prefs.QuietWhenClaudeFocused,
-            v => prefs.QuietWhenClaudeFocused = v));
-        notify.Items.Add(Item("Örnek bildirim gönder", () =>
-        {
-            if (prefs.ShowToasts) tray.Notify("Claude · Petglare", "Bildirimler böyle görünür.", Forms.ToolTipIcon.Info);
-            if (prefs.PlaySound) SystemSounds.Asterisk.Play();
-        }));
-        menu.Items.Add(notify);
-
-        var look = new MenuItem { Header = "Görünüm" };
-        look.Items.Add(Choice("Maskot", Appearance.Shapes.Select(s => (s.Name, s.Name)), prefs.Mascot,
-            v => prefs.Mascot = v));
-        look.Items.Add(Choice("Renk", Appearance.Palettes.Select(p => (p.Name, p.Name)), prefs.Palette,
-            v => prefs.Palette = v));
-        look.Items.Add(Choice("Balon", Appearance.Bubbles.Select(b => (b.Name, b.Name)), prefs.Bubble,
-            v => prefs.Bubble = v));
-        look.Items.Add(Choice("Saydamlık", Appearance.Opacities.Select(o => (o == 100 ? "Opak" : $"%{o}", o)),
-            prefs.Opacity, v => prefs.Opacity = v));
-        look.Items.Add(Choice("Yazı boyutu", Appearance.FontSizes.Select(f => (f.Name, f.Size)), prefs.FontSize,
-            v => prefs.FontSize = v));
-        look.Items.Add(new Separator());
-        look.Items.Add(Check("Proje adını göster", prefs.ShowProject, v => prefs.ShowProject = v));
-        look.Items.Add(Check("Tamamlanma parıltısını göster", prefs.ShowSpark != false, v => prefs.ShowSpark = v));
-        menu.Items.Add(look);
-
-        var place = new MenuItem { Header = "Konum" };
-        place.Items.Add(Check("Ekran kenarlarına yasla", prefs.SnapToEdges, v => prefs.SnapToEdges = v));
-        place.Items.Add(Check("Tam ekran uygulamalarda gizlen", prefs.HideInFullScreen, v =>
-        {
-            prefs.HideInFullScreen = v;
-            CheckFullScreen();
-        }));
-        place.Items.Add(new Separator());
-        place.Items.Add(Item("Sağ alt köşeye taşı", MoveToCorner));
-        if (Screen.AllScreens.Length > 1)
-        {
-            var screens = new MenuItem { Header = "Ekrana taşı" };
-            int index = 1;
-            foreach (var screen in Screen.AllScreens)
-            {
-                var target = screen;
-                screens.Items.Add(Item($"Ekran {index++}{(screen.Primary ? " (birincil)" : "")}",
-                    () => MoveToCorner(target)));
-            }
-            place.Items.Add(screens);
-        }
-        menu.Items.Add(place);
-
-        bool autoStart = SafeAutoStart();
-        menu.Items.Add(Check("Windows açılırken başlat", autoStart, v =>
-        {
-            try { AutoStart.Set(v); }
-            catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException
-                                           or System.IO.IOException)
-            {
-                Say("Otomatik başlatma ayarlanamadı", warning: true, seconds: 6);
-            }
-        }, save: false));
         menu.Items.Add(Item("Bağlantı teşhisi…", OpenDiagnostics));
         menu.Items.Add(new Separator());
         menu.Items.Add(Item("Petglare’ı kapat", Close));
         return menu;
-    }
-
-    private static bool SafeAutoStart()
-    {
-        try { return AutoStart.IsEnabled; }
-        catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException) { return false; }
     }
 
     private static MenuItem Item(string header, Action action)
@@ -475,40 +406,6 @@ public partial class PetWindow : Window
         var item = new MenuItem { Header = header };
         item.Click += (_, _) => action();
         return item;
-    }
-
-    private MenuItem Check(string header, bool value, Action<bool> set, bool save = true)
-    {
-        var item = new MenuItem { Header = header, IsCheckable = true, IsChecked = value, StaysOpenOnClick = false };
-        item.Click += (_, _) =>
-        {
-            set(item.IsChecked);
-            if (save) prefs.Save();
-            ApplyAppearance();
-        };
-        return item;
-    }
-
-    private MenuItem Choice<T>(string header, System.Collections.Generic.IEnumerable<(string Name, T Value)> options,
-        T current, Action<T> set)
-    {
-        var parent = new MenuItem { Header = header };
-        foreach (var (name, value) in options)
-        {
-            var item = new MenuItem
-            {
-                Header = name, IsCheckable = true,
-                IsChecked = System.Collections.Generic.EqualityComparer<T>.Default.Equals(value, current)
-            };
-            item.Click += (_, _) =>
-            {
-                set(value);
-                prefs.Save();
-                ApplyAppearance();
-            };
-            parent.Items.Add(item);
-        }
-        return parent;
     }
 
     private static System.Windows.Shapes.Ellipse Dot(PetPhase phase) => new()
@@ -544,7 +441,7 @@ public partial class PetWindow : Window
         prefs.Hidden = hidden;
         prefs.Save();
         UpdateVisibility();
-        if (hidden && !SafeAutoStart())
+        if (hidden)
             tray.Notify("Petglare", "Maskot gizlendi. Bildirim alanındaki simgeye tıklayarak geri getirebilirsin.",
                 Forms.ToolTipIcon.Info);
     }
@@ -565,16 +462,41 @@ public partial class PetWindow : Window
             Show();
             if (savedAnchor is { } anchor && GetWindowRect(handle, out var bounds))
                 savedAnchor = MoveIntoWorkArea(anchor, bounds);
+            KeepOnTop();
         }
         else if (!visible && IsVisible) Hide();
     }
 
+    /// <summary>Left clicks are ignored when the user chose so, always or over a full-screen app.</summary>
+    private bool LeftClickLocked => prefs.LeftClick switch
+    {
+        Preferences.LeftClickOff => true,
+        Preferences.LeftClickFullScreenOff => fullScreenActive,
+        _ => false
+    };
+
     private void CheckFullScreen()
     {
-        bool hide = prefs.HideInFullScreen && ForegroundIsFullScreen();
+        bool active = ForegroundIsFullScreen();
+        if (active != fullScreenActive)
+        {
+            fullScreenActive = active;
+            Pet.Interactive = !LeftClickLocked;
+        }
+        bool hide = prefs.HideInFullScreen && active;
         if (hide == fullScreenHidden) return;
         fullScreenHidden = hide;
         UpdateVisibility();
+    }
+
+    /// <summary>
+    /// Borderless full-screen apps raise themselves above other topmost windows; put the pet back on top.
+    /// Exclusive full-screen games draw past every window, which no app can change.
+    /// </summary>
+    private void KeepOnTop()
+    {
+        if (prefs.AlwaysOnTop && IsVisible && handle != IntPtr.Zero && dragOffset is null)
+            SetWindowPos(handle, TopMost, 0, 0, 0, 0, RaiseWithoutActivation);
     }
 
     private bool ForegroundIsFullScreen()
@@ -596,7 +518,6 @@ public partial class PetWindow : Window
 
     private void RestorePosition()
     {
-        mascotSize = Math.Clamp(prefs.Size ?? DefaultSize, 80, 150);
         ApplySize();
         if (!GetWindowRect(handle, out var bounds)) return;
 
@@ -607,6 +528,16 @@ public partial class PetWindow : Window
         savedAnchor = MoveIntoWorkArea(anchor, bounds);
     }
 
+    private void MoveToCorner()
+    {
+        if (!GetWindowRect(handle, out var bounds)) return;
+        var screen = savedAnchor is { } anchor ? Screen.FromPoint(anchor) : Screen.PrimaryScreen!;
+        var work = screen.WorkingArea;
+        var corner = new Point(work.Right - bounds.Width - 18, work.Bottom - bounds.Height - 18);
+        savedAnchor = MoveIntoWorkArea(corner, bounds);
+        SavePreferences();
+    }
+
     private void DisplayChanged(object? sender, EventArgs e) => Dispatcher.InvokeAsync(() =>
     {
         // Return to the saved spot when a monitor comes back; otherwise stay on a visible screen.
@@ -615,20 +546,9 @@ public partial class PetWindow : Window
         if (anchor is { } point) savedAnchor = MoveIntoWorkArea(point, bounds);
     });
 
-    private void MoveToCorner() => MoveToCorner(null);
-
-    private void MoveToCorner(Screen? target)
-    {
-        if (!GetWindowRect(handle, out var bounds)) return;
-        var screen = target ?? (savedAnchor is { } anchor ? Screen.FromPoint(anchor) : Screen.PrimaryScreen!);
-        var work = screen.WorkingArea;
-        var corner = new Point(work.Right - bounds.Width - 18, work.Bottom - bounds.Height - 18);
-        savedAnchor = MoveIntoWorkArea(corner, bounds);
-        SavePreferences();
-    }
-
     private void StartDrag(object sender, MouseButtonEventArgs e)
     {
+        if (LeftClickLocked) return;
         if (!GetCursorPos(out var cursor) || !GetWindowRect(handle, out var bounds)) return;
         if (!((UIElement)sender).CaptureMouse()) return;
         dragOffset = new Point(cursor.X - bounds.Left, cursor.Y - bounds.Top);
@@ -650,8 +570,9 @@ public partial class PetWindow : Window
 
     private void EndDrag(object sender, MouseButtonEventArgs e)
     {
+        if (dragOffset is null) return;
         Drag(sender, e);
-        bool openClaude = dragOffset is not null && !dragging;
+        bool openClaude = !dragging;
         ((UIElement)sender).ReleaseMouseCapture();
         if (openClaude) OpenClaude();
         e.Handled = true;
@@ -675,9 +596,10 @@ public partial class PetWindow : Window
     private Point Snap(Point anchor, Bounds bounds)
     {
         var dpi = VisualTreeHelper.GetDpi(this);
-        int mascotWidth = (int)Math.Round(Mascot.Width * MascotScale.ScaleX * dpi.DpiScaleX);
-        int rightMargin = (int)Math.Round(Mascot.Margin.Right * dpi.DpiScaleX);
-        int bottomMargin = (int)Math.Round(Mascot.Margin.Bottom * dpi.DpiScaleY);
+        var mascot = Pet.Mascot;
+        int mascotWidth = (int)Math.Round(mascot.Width * Pet.MascotScale.ScaleX * dpi.DpiScaleX);
+        int rightMargin = (int)Math.Round(mascot.Margin.Right * dpi.DpiScaleX);
+        int bottomMargin = (int)Math.Round(mascot.Margin.Bottom * dpi.DpiScaleY);
         int gap = (int)Math.Round(SnapGap * dpi.DpiScaleX);
         int reach = (int)Math.Round(SnapDistance * dpi.DpiScaleX);
 
@@ -695,32 +617,51 @@ public partial class PetWindow : Window
     }
 
     private Point CurrentAnchor(Bounds bounds) => new(
-        bounds.Left + (int)Math.Round(MascotOffset.X * VisualTreeHelper.GetDpi(this).DpiScaleX),
+        bounds.Left + (int)Math.Round(Pet.MascotOffset.X * VisualTreeHelper.GetDpi(this).DpiScaleX),
         bounds.Top);
-
-    private void Shrink(object sender, RoutedEventArgs e) => ResizeMascot(-10);
-    private void Enlarge(object sender, RoutedEventArgs e) => ResizeMascot(10);
 
     private void ResizeMascot(int change)
     {
-        int size = Math.Clamp(mascotSize + change, 80, 150);
-        if (size == mascotSize || !GetWindowRect(handle, out var before)) return;
-        var anchor = CurrentAnchor(before);
-        if (MascotOffset.X < 0)
-            anchor.X += (int)Math.Round(Mascot.Width * (size - mascotSize) / 100.0
-                * VisualTreeHelper.GetDpi(this).DpiScaleX);
-        mascotSize = size;
-        ApplySize();
-        if (!GetWindowRect(handle, out var after)) return;
-        anchor.Y += before.Height - after.Height;
-        savedAnchor = MoveIntoWorkArea(anchor, after);
+        if (LeftClickLocked) return;
+        int size = Math.Clamp(prefs.MascotSize + change, 80, 150);
+        if (size == prefs.MascotSize) return;
+        Relayout(() => prefs.Size = size);
+        Pet.ApplyLook(prefs);
         SavePreferences();
+    }
+
+    /// <summary>
+    /// Applies a change that resizes the window (mascot size, bubble size or count) while the
+    /// mascot keeps its place on screen: its right and bottom edges stay where they were.
+    /// </summary>
+    private void Relayout(Action change)
+    {
+        int before = prefs.MascotSize;
+        if (!GetWindowRect(handle, out var old))
+        {
+            change();
+            ApplySize();
+            return;
+        }
+        var anchor = CurrentAnchor(old);
+        bool shifted = Pet.MascotOffset.X < 0;
+        change();
+        if (shifted)
+            anchor.X += (int)Math.Round(Pet.Mascot.Width * (prefs.MascotSize - before) / 100.0
+                * VisualTreeHelper.GetDpi(this).DpiScaleX);
+        ApplySize();
+        if (!GetWindowRect(handle, out var updated)) return;
+        anchor.X += old.Width - updated.Width;
+        anchor.Y += old.Height - updated.Height;
+        savedAnchor = MoveIntoWorkArea(anchor, updated);
     }
 
     private void ApplySize()
     {
-        MascotScale.ScaleX = MascotScale.ScaleY = mascotSize / 100.0;
-        Height = BaseHeight + Math.Ceiling(Mascot.Height * Math.Max(0, MascotScale.ScaleY - 1));
+        Pet.MascotScale.ScaleX = Pet.MascotScale.ScaleY = prefs.MascotSize / 100.0;
+        var size = PetView.WindowSize(prefs);
+        Width = size.Width;
+        Height = size.Height;
         UpdateLayout();
     }
 
@@ -729,7 +670,6 @@ public partial class PetWindow : Window
         if (savedAnchor is not { } position) return;
         prefs.X = position.X;
         prefs.Y = position.Y;
-        prefs.Size = mascotSize;
         prefs.Monitor = Screen.FromPoint(position).DeviceName;
         prefs.Save();
     }
@@ -737,17 +677,18 @@ public partial class PetWindow : Window
     private Point MoveIntoWorkArea(Point anchor, Bounds bounds)
     {
         var dpi = VisualTreeHelper.GetDpi(this);
-        double mascotWidth = Mascot.Width * MascotScale.ScaleX;
-        double mascotHeight = Mascot.Height * MascotScale.ScaleY;
+        var mascot = Pet.Mascot;
+        double mascotWidth = mascot.Width * Pet.MascotScale.ScaleX;
+        double mascotHeight = mascot.Height * Pet.MascotScale.ScaleY;
         int leftInset = Math.Max(0, bounds.Width -
-            (int)Math.Round((mascotWidth + Mascot.Margin.Right) * dpi.DpiScaleX));
+            (int)Math.Round((mascotWidth + mascot.Margin.Right) * dpi.DpiScaleX));
         var mascotCenter = new Point(
             anchor.X + leftInset + (int)Math.Round(mascotWidth * dpi.DpiScaleX / 2),
-            anchor.Y + bounds.Height - (int)Math.Round((mascotHeight / 2 + Mascot.Margin.Bottom) * dpi.DpiScaleY));
+            anchor.Y + bounds.Height - (int)Math.Round((mascotHeight / 2 + mascot.Margin.Bottom) * dpi.DpiScaleY));
         var work = Screen.FromPoint(mascotCenter).WorkingArea;
         var placement = ConstrainPlacement(anchor, work, bounds.Width, bounds.Height, leftInset);
-        MascotOffset.X = (placement.Anchor.X - placement.Window.X) / dpi.DpiScaleX;
-        UpdateBubblePlacement();
+        Pet.MascotOffset.X = (placement.Anchor.X - placement.Window.X) / dpi.DpiScaleX;
+        Pet.UpdateBubblePlacement();
         Move(placement.Window);
         return placement.Anchor;
     }
@@ -756,7 +697,7 @@ public partial class PetWindow : Window
         Point anchor, Rectangle work, int width, int height, int leftInset)
     {
         // Keep the original window origin in saved positions, including when the
-        // mascot moves inside the window to use the space reserved for the bubble.
+        // mascot moves inside the window to use the space reserved for the bubbles.
         int left = work.Left - leftInset;
         var placed = new Point(
             Math.Clamp(anchor.X, left, Math.Max(left, work.Right - width)),
@@ -764,18 +705,9 @@ public partial class PetWindow : Window
         return (placed, new Point(Math.Max(placed.X, work.Left), placed.Y));
     }
 
-    private void BubbleSizeChanged(object sender, SizeChangedEventArgs e) => UpdateBubblePlacement();
-
-    private void UpdateBubblePlacement()
+    private void OpenClaude()
     {
-        double availableShift = Math.Max(0, ActualWidth - Bubble.ActualWidth - Bubble.Margin.Left - Bubble.Margin.Right);
-        BubbleOffset.X = Math.Max(MascotOffset.X, -availableShift);
-        double tail = MascotOffset.X - BubbleOffset.X + Mascot.Width * (1 - MascotScale.ScaleX) / 2;
-        TailOffset.X = Math.Clamp(tail, -Math.Max(0, Bubble.ActualWidth - 40), 28);
-    }
-
-    private static void OpenClaude()
-    {
+        if (state.ClearFinished()) RenderStatus();
         try
         {
             Process.Start(new ProcessStartInfo("explorer.exe", @"shell:AppsFolder\Claude_pzs8sxrjxfjjc!Claude"));

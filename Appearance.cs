@@ -42,8 +42,22 @@ internal static class Appearance
             Rgb(0x1E7A57), Rgb(0xB3261E), Rgb(0x8A5200))
     ];
 
-    internal static readonly (string Name, int Size)[] FontSizes = [("Küçük", 12), ("Normal", 13), ("Büyük", 15)];
+    /// <summary>How big one speech bubble is, and how wide the pet window must be to hold it.</summary>
+    internal sealed record BubbleMetrics(string Name, double Font, double Height, double Radius,
+        double TextWidth, double WindowWidth, double Tick);
+
+    internal static readonly BubbleMetrics[] BubbleSizes =
+    [
+        new("Küçük", 12, 32, 13, 168, 230, 18),
+        new("Normal", 13, 38, 15, 218, 260, 22),
+        new("Büyük", 15, 44, 18, 270, 320, 26)
+    ];
+
     internal static readonly int[] Opacities = [100, 85, 70, 55];
+    internal static readonly int[] MascotSizes = [80, 100, 120, 150];
+
+    internal static BubbleMetrics Metrics(string? name) =>
+        BubbleSizes.FirstOrDefault(m => m.Name == name) ?? BubbleSizes[1];
 
     internal static MascotShape Shape(string? name) => Shapes.FirstOrDefault(s => s.Name == name) ?? Shapes[0];
     internal static Palette Colors(string? name) => Palettes.FirstOrDefault(p => p.Name == name) ?? Palettes[0];

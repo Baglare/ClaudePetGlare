@@ -16,13 +16,21 @@ internal sealed class Preferences
     public int? Y { get; set; }
     public int? Size { get; set; }
     public string? Monitor { get; set; }
-
-    // Behaviour
-    public bool? ShowSpark { get; set; }
-    public bool ShowProject { get; set; } = true;
-    public bool SnapToEdges { get; set; } = true;
-    public bool HideInFullScreen { get; set; } = true;
     public bool Hidden { get; set; }
+
+    // Staying on screen
+    public bool AlwaysOnTop { get; set; } = true;
+    public bool HideInFullScreen { get; set; } = true;
+    /// <summary>"Açık", "Tam ekranda kapalı" or "Kapalı".</summary>
+    public string LeftClick { get; set; } = LeftClickOn;
+    public bool SnapToEdges { get; set; } = true;
+
+    // Bubbles
+    public string Bubble { get; set; } = "Gece";
+    public string BubbleSize { get; set; } = "Normal";
+    public int MaxBubbles { get; set; } = 2;
+    public bool ShowProject { get; set; } = true;
+    public bool? ShowSpark { get; set; }
 
     // Notifications
     public bool ShowToasts { get; set; } = true;
@@ -32,12 +40,29 @@ internal sealed class Preferences
     public bool PlaySound { get; set; }
     public bool QuietWhenClaudeFocused { get; set; } = true;
 
-    // Appearance
+    // Mascot
     public string Mascot { get; set; } = "Kedi";
     public string Palette { get; set; } = "Lavanta";
-    public string Bubble { get; set; } = "Gece";
     public int Opacity { get; set; } = 100;
-    public int FontSize { get; set; } = 13;
+
+    internal const string LeftClickOn = "Açık";
+    internal const string LeftClickFullScreenOff = "Tam ekranda kapalı";
+    internal const string LeftClickOff = "Kapalı";
+
+    internal int MascotSize => Math.Clamp(Size ?? 100, 80, 150);
+    internal int BubbleCount => Math.Clamp(MaxBubbles, 1, 3);
+
+    internal Preferences Clone() =>
+        JsonSerializer.Deserialize<Preferences>(JsonSerializer.Serialize(this))!;
+
+    /// <summary>Takes every setting from <paramref name="other"/> except where the pet stands.</summary>
+    internal void CopySettingsFrom(Preferences other)
+    {
+        var (x, y, monitor, hidden) = (X, Y, Monitor, Hidden);
+        foreach (var property in typeof(Preferences).GetProperties())
+            if (property.CanWrite) property.SetValue(this, property.GetValue(other));
+        (X, Y, Monitor, Hidden) = (x, y, monitor, hidden);
+    }
 
     internal static Preferences Load()
     {

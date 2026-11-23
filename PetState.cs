@@ -64,11 +64,31 @@ internal sealed class PetState
 
     internal IReadOnlyCollection<SessionStatus> Sessions => sessions.Values;
 
-    /// <summary>The session the bubble should speak for, if any.</summary>
-    internal SessionStatus? Focus => sessions.Values
+    /// <summary>Sessions that have something to say, most important first.</summary>
+    internal SessionStatus[] Speaking => sessions.Values
         .Where(s => s.Priority > 0)
         .OrderByDescending(s => s.Priority).ThenByDescending(s => s.LastEvent)
-        .FirstOrDefault();
+        .ToArray();
+
+    /// <summary>The session the nearest bubble speaks for, if any.</summary>
+    internal SessionStatus? Focus => Speaking.FirstOrDefault();
+
+    /// <summary>
+    /// The user has looked at Claude, so finished turns no longer need a reminder.
+    /// Returns true when anything visible changed.
+    /// </summary>
+    internal bool ClearFinished()
+    {
+        bool changed = false;
+        foreach (var session in sessions.Values)
+        {
+            if (session.Phase != PetPhase.Badge) continue;
+            session.Phase = PetPhase.Idle;
+            session.Message = "";
+            changed = true;
+        }
+        return changed;
+    }
 
     internal bool ShowBadge => sessions.Values.Any(s => s.Phase == PetPhase.Badge);
 
