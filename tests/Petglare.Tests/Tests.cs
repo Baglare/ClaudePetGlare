@@ -99,6 +99,9 @@ internal static class Tests
         Check(PetView.WindowSize(new Preferences { Size = 200, BubbleScale = 85 }).Width >= 89 * 2,
             "window is wide enough for the largest mascot");
         Check(PetView.WindowSize(new Preferences { MaxBubbles = 1 }) == new Size(260, 143), "one normal bubble keeps the original size");
+        Check(!new Preferences().HideInFullScreen, "hide in full screen is off by default");
+        Check(JsonSerializer.Deserialize<Preferences>("{\"HideInFullScreen\":true}")!.HideInFullScreen
+            && !JsonSerializer.Deserialize<Preferences>("{}")!.HideInFullScreen, "a saved choice is kept, a missing one is off");
         var copy = new Preferences { X = 5, Hidden = true };
         copy.CopySettingsFrom(new Preferences { X = 99, Hidden = false, Palette = "Nane", Size = 120 });
         Check(copy.X == 5 && copy.Hidden && copy.Palette == "Nane" && copy.Size == 120, "copy settings keeps position");

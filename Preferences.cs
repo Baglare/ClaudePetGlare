@@ -21,7 +21,8 @@ internal sealed class Preferences
 
     // Staying on screen
     public bool AlwaysOnTop { get; set; } = true;
-    public bool HideInFullScreen { get; set; } = true;
+    /// <summary>Off by default: most people want the pet over a borderless game. Saved choices are kept.</summary>
+    public bool HideInFullScreen { get; set; }
     /// <summary>"Açık", "Tam ekranda kapalı" or "Kapalı".</summary>
     public string LeftClick { get; set; } = LeftClickOn;
     public bool SnapToEdges { get; set; } = true;

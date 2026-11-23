@@ -53,7 +53,7 @@ Menüdeki **Bildirimler** bölümünden Windows bildirimini ve kısa sesi ayrı 
 - **Maskot**: üç şekil (Kedi, Damla, Hayalet) ve kendi pet’lerin, beş renk, **Maskot boyutu** (%60–200) ve **Saydamlık** (%30–100).
 - **Balonlar**: dört stil, **Balon boyutu** (%85–130), aynı anda gösterilen sohbet sayısı, proje adı ve tamamlanma parıltısı.
 - **Her zaman en üstte**: maskotu her saniye yeniden en üste koyar; kenarlıksız pencere modundaki oyunların üstünde de kalır. Özel (exclusive) tam ekran modundaki oyunların üstüne Windows hiçbir pencereyi çizdirmez; o oyunlarda görüntü ayarından kenarlıksız pencereyi seç.
-- **Tam ekranda gizle**: aynı ekranda tam ekran bir uygulama açıkken maskotu saklar. Kapatırsan maskot oyunun, videonun veya sunumun üstünde kalır.
+- **Tam ekranda gizle** (varsayılan kapalı): açarsan aynı ekranda tam ekran bir uygulama açıkken maskot saklanır. Kapalıyken maskot kenarlıksız oyunun, videonun veya sunumun üstünde kalır. Daha önce kaydedilmiş seçim korunur.
 - **Sol tık**: *Açık*, *Tam ekranda kapalı* veya *Kapalı*. Kapalıyken sol tık Claude’u açmaz, maskotu taşımaz ve − / + düğmeleri görünmez; sağ tık menüsü her zaman çalışır. Oyun oynarken yanlışlıkla tıklamaya karşı *Tam ekranda kapalı* seçeneği uygundur.
 - **Ekran kenarlarına yasla**, **Windows açılırken başlat** (`HKCU\…\Run`; EXE’yi taşırsan yeniden aç) ve **Sağ alt köşeye taşı**. Bir monitör çıkarılırsa maskot görünen bir ekrana geçer, monitör geri gelince eski yerine döner.
 
