@@ -56,6 +56,7 @@ Menüdeki **Bildirimler** bölümünden Windows bildirimini ve kısa sesi ayrı 
 - **Tam ekranda gizle** (varsayılan kapalı): açarsan aynı ekranda tam ekran bir uygulama açıkken maskot saklanır. Kapalıyken maskot kenarlıksız oyunun, videonun veya sunumun üstünde kalır. Daha önce kaydedilmiş seçim korunur.
 - **Sol tık**: *Açık*, *Tam ekranda kapalı* veya *Kapalı*. Kapalıyken sol tık Claude’u açmaz, maskotu taşımaz ve − / + düğmeleri görünmez; sağ tık menüsü her zaman çalışır. Oyun oynarken yanlışlıkla tıklamaya karşı *Tam ekranda kapalı* seçeneği uygundur.
 - **Ekran kenarlarına yasla**, **Windows açılırken başlat** (`HKCU\…\Run`; EXE’yi taşırsan yeniden aç) ve **Sağ alt köşeye taşı**. Bir monitör çıkarılırsa maskot görünen bir ekrana geçer, monitör geri gelince eski yerine döner.
+- Maskot monitörün tamamında dolaşır: görev çubuğunun üstüne binebilir ve ekranın gerçek kenarlarına kadar gider. Kenara yaslanma ekran kenarına tam bitişik, görev çubuğu kenarına ise küçük bir boşlukla oturur; hangisi yakınsa onu seçer. Varsayılan konum ve **Sağ alt köşeye taşı** görev çubuğunun üstünde kalır.
 
 Boyut ve saydamlık sürgüyle tam istediğin değere ayarlanır; altındaki hazır düğmeler (%80, Opak, Küçük…) sık kullanılan değerlere atlar. Sürgü odaktayken ok tuşları 1, Page Up / Page Down 10 adım değiştirir.
 
@@ -65,14 +66,33 @@ Boyut ve saydamlık sürgüyle tam istediğin değere ayarlanır; altındaki haz
 
 1. Görseli sürükle, **Ctrl+V** ile yapıştır veya **Görsel seç…** (PNG, JPG, BMP, GIF, WebP). En çok 64 MB ve 40 megapiksel; büyük görseller açılırken 1024 piksele küçültülür.
 2. Arka planı sil:
-   - **Kenardan sil**: düz renkli arka planlar için; **Renk toleransı** benzer tonları da alır.
-   - **Yapay zekâ ile sil**: fotoğraflar için. İlk kullanımda U²-Net modeli (`u2netp.onnx`, 4,4 MB, [rembg](https://github.com/danielgatis/rembg), Apache-2.0) senin onayınla bir kez indirilir ve sabit SHA-256 ile doğrulanır. Model bilgisayarında çalışır; görselin hiçbir yere gönderilmez. Model dosyası bozulursa düğme **Bozuk modeli onar** olur ve onayınla dosyayı silip yeniden indirir.
+   - **Önizle: kenardan sil**: düz renkli arka planlar için. Silinecek yerler pembe görünür; **Uygula** demeden hiçbir şey silinmez. **Renk toleransı** algısal renk farkıyla (CIELAB ΔE) ölçülür, varsayılanı %6'dır; sürgü değiştikçe önizleme güncellenir. Arka plan rengini **Renk seç** aracıyla kendin seçebilirsin (birden çok renk olur); seçmezsen kenarlardaki ana renkler kullanılır. Görünen kısmın %90'ından fazlası silinecekse uyarı çıkar ve uygulamadan önce sorulur.
+   - **Koru** fırçası: renkten silme, sihirli değnek ve yapay zekânın dokunmayacağı yeri yeşille boyar (**Korumayı kaldır** ile silinir).
+   - **Yapay zekâ ile sil**: fotoğraflar için. İlk kullanımda U²-Net modeli (`u2netp.onnx`, 4,4 MB, [rembg](https://github.com/danielgatis/rembg), Apache-2.0) senin onayınla bir kez indirilir ve sabit SHA-256 ile doğrulanır. Model bilgisayarında çalışır; görselin hiçbir yere gönderilmez. Model dosyası bozulursa düğme **Bozuk modeli onar** olur ve onayınla dosyayı silip yeniden indirir. **Yüksek kalite** seçeneği modeli fotoğrafın 0°, 90°, 180° ve 270° döndürülmüş hâllerinde çalıştırıp sonuçları birleştirir; yaklaşık dört kat yavaştır (ölçüm sonuçları aşağıda).
 3. İnce ayar: **Silgi** ve **Geri getir** fırçaları (boyut, sertlik; `[` `]`), tıklanan renk bölgesini silen **Sihirli değnek**, **Kırp**, **Kenarı daralt** (renk saçağını alır), **Kenarı yumuşat**, **Boşlukları kırp**, döndür ve çevir.
 4. Sağdaki ön izleme masaüstündeki görünümü gösterir. Ad verip **Kaydet**.
 
-Araçlar yalnız görselin üzerindeki maskeyi değiştirir; silinen yer **Geri getir** ile boyanabilir, **Ctrl+Z / Ctrl+Y** son 20 adımı geri alır. Tekerlek yakınlaştırır, sağ tık veya **Boşluk** ile sürükleme kaydırır, **Ctrl+0** sığdırır. Kısayollar: **E** silgi, **R** geri getir, **W** değnek, **C** kırp.
+Araçlar yalnız görselin üzerindeki maskeyi değiştirir; silinen yer **Geri getir** ile boyanabilir, **Ctrl+Z / Ctrl+Y** son 20 adımı geri alır. Tekerlek yakınlaştırır, sağ tık veya **Boşluk** ile sürükleme kaydırır, **Ctrl+0** sığdırır. Kısayollar: **E** silgi, **R** geri getir, **W** değnek, **P** renk seç, **K** koru, **C** kırp, **Esc** önizlemeyi kapatır.
 
 Pet’ler `%LOCALAPPDATA%\Petglare\Pets` altında saklanır. Ayarlar’da kendi pet’ine sağ tıklayınca **Düzenle**, **Dışa aktar** (paylaşılabilir `.petglare` dosyası) ve **Sil** çıkar; **Pet dosyası içe aktar…** başkasının `.petglare` dosyasını ekler (yalnız görsel alınır, boyutu denetlenir ve yeniden kodlanır). Kendi pet’lerinde renkler görselden gelir; durum balonları, rozet ve parıltı aynen çalışır.
+
+### Arka plan modeli: ölçüm
+
+Yöntemler, doğru cevabı bilinen görsellerde karşılaştırıldı: şeffaf Petglare maskotu, bilgisayardaki 8 Windows duvar kâğıdı fotoğrafının üstüne üç en-boy oranında (3:2, 2:3, 1:1) ve iki konumda yerleştirildi; her görsel 0°, 90°, 180° ve 270° döndürülerek çalıştırıldı (48 × 4). IoU, maskenin doğru cevapla örtüşmesidir.
+
+| Yöntem | IoU ort. | 0° / 90° / 180° / 270° | Ön plan korunan | Yanlış ön plan | Yönelim tutarlılığı | Süre |
+|---|---|---|---|---|---|---|
+| Hızlı, 320×320 esnetme (varsayılan) | 0,706 | 0,692 / 0,736 / 0,664 / 0,731 | %96,5 | %13,8 | 0,838 | ~210 ms |
+| Hızlı, oran korumalı | 0,634 | 0,628 / 0,652 / 0,615 / 0,640 | %95,4 | %20,9 | 0,831 | ~200 ms |
+| **Yüksek kalite**, 4 yön, ortalama | **0,732** | 0,732 (hepsi) | %97,4 | %13,7 | 1,000 | ~850 ms |
+| Yüksek kalite, 4 yön, en büyük | 0,647 | 0,647 (hepsi) | %98,7 | %19,8 | 1,000 | ~850 ms |
+| Yüksek kalite, oran korumalı | 0,672 | 0,672 (hepsi) | %97,5 | %19,0 | 1,000 | ~820 ms |
+
+Sonuç: oran korumalı ön işleme bu modelde daha kötü (fazladan arka planı ön plan sayıyor), bu yüzden kullanılmıyor. Yüksek kalite (esnetme + ortalama) yönelimden bağımsız aynı sonucu veriyor ve ortalamada biraz daha iyi; yaklaşık dört kat sürüyor, bu yüzden isteğe bağlı. Sınırlar: ön plan bir çizgi karakter; insan fotoğrafı içeren bir ölçüm seti yok, yan çekilmiş insan fotoğraflarındaki kazanç ayrıca elle denenmeli. Ölçümü tekrar çalıştırmak için:
+
+```powershell
+dotnet run --project tests\Petglare.Tests -c Release -- --bench <u2netp.onnx yolu> Assets\Petglare-Icon-Transparent-1024.png <rapor klasörü>
+```
 
 ### Bağlantı teşhisi
 
@@ -86,7 +106,7 @@ Petglare açıkken aşağıdaki komutla iki projede düşünme, dosya okuma/düz
 .\Petglare.exe --demo | Out-Host
 ```
 
-İşlem sırasında üç dakika olay gelmezse balon kapanır; onay bekleme otuz dakika görünür kalır. Altı saattir hareketsiz oturumlar listeden düşer.
+İşlem sırasında üç dakika olay gelmezse balon kapanır; onay bekleme otuz dakika görünür kalır. Altı saattir hareketsiz oturumlar listeden düşer. Menüdeki **Boştaki oturumları temizle** biten ve hareketsiz oturumları hemen çıkarır; çalışan, onay bekleyen veya hata veren oturumlar kalır. Paralel araçlar araç kimliğiyle ayrı izlenir; `Stop`'tan sonra geç gelen araç sonuçları bitmiş bir yanıtı yeniden "çalışıyor" yapmaz. Claude bir yanıtı sen Esc ile durdurduğunda `Stop` göndermez; o oturum üç dakikalık zaman aşımıyla kapanır.
 
 Hook’lar [Claude Code hook belgelerindeki](https://code.claude.com/docs/en/hooks) `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `Notification` (yalnız onay ve soru bildirimleri), `Stop`, `StopFailure`, `SessionStart` ve `SessionEnd` olaylarını aynı Windows kullanıcısına ait yerel bir named pipe üzerinden iletir. Petglare prompt, dosya içeriği ve ham komut kaydetmez; yalnız olay türünü, araç türünü, dosya adını ve proje klasörünün adını iletir. Ayarlar `%LOCALAPPDATA%\Petglare\position.json` dosyasında tutulur. Başka bir Stop hook’u Claude’a devam etmesini söylerse Petglare bu kararı göremez.
 

@@ -44,6 +44,8 @@ internal sealed class SessionStatus
     internal bool Warning { get; set; }
     internal TimeSpan LastEvent { get; set; }
     internal string? Prompt { get; set; }
+    /// <summary>The prompt whose turn ended last; late hook events for it are ignored.</summary>
+    internal string? FinishedPrompt { get; set; }
     internal bool InTurn { get; set; }
     internal TimeSpan TurnStarted { get; set; }
     internal TimeSpan Deadline { get; set; }
@@ -58,6 +60,9 @@ internal sealed class SessionStatus
     internal string Title => Project ?? $"Oturum {Id[..Math.Min(6, Id.Length)]}";
 
     internal bool IsActive => Phase is PetPhase.Working or PetPhase.Attention;
+
+    /// <summary>Nothing running, waiting or failing: safe to forget.</summary>
+    internal bool IsIdle => Phase is PetPhase.Idle or PetPhase.Badge or PetPhase.Complete;
 
     internal int Priority => Phase switch
     {
@@ -118,6 +123,19 @@ internal sealed class PetState
 
     internal bool ShowBadge => sessions.Values.Any(s => s.Phase == PetPhase.Badge);
 
+    internal int IdleCount => sessions.Values.Count(s => s.IsIdle);
+
+    /// <summary>
+    /// Forgets sessions that are idle or finished. Working, waiting and failed sessions stay;
+    /// a forgotten session comes back with its next hook event. Returns how many went.
+    /// </summary>
+    internal int ClearIdle()
+    {
+        var idle = sessions.Values.Where(s => s.IsIdle).Select(s => s.Id).ToList();
+        foreach (var id in idle) sessions.Remove(id);
+        return idle.Count;
+    }
+
     internal int ActiveCount => sessions.Values.Count(s => s.IsActive);
 
     /// <summary>Applies a hook notice and returns an alert when the user may want to know.</summary>
@@ -154,11 +172,16 @@ internal sealed class PetState
         // A late notice from an earlier turn must not overwrite the current one.
         if (session.InTurn && session.Prompt is not null && notice.Prompt is not null && notice.Prompt != session.Prompt)
             return null;
+        // Hooks run as separate processes, so a tool result can arrive after Stop; it must not
+        // bring a finished turn back to "working".
+        if (notice.Prompt is not null && notice.Prompt == session.FinishedPrompt) return null;
 
         if (!session.InTurn)
         {
-            // Stop and failure only mean something for a turn Petglare saw start.
-            if (notice.Event is HookEvent.Stop or HookEvent.Failure) return null;
+            // Stop and failure only mean something for a turn Petglare saw start; results and
+            // notifications only report on one, so neither starts a turn.
+            if (notice.Event is HookEvent.Stop or HookEvent.Failure or HookEvent.ToolDone
+                or HookEvent.ToolFailed or HookEvent.Attention) return null;
             // Petglare may have started in the middle of a turn.
             session.InTurn = true;
             session.Prompt = notice.Prompt;
@@ -216,6 +239,7 @@ internal sealed class PetState
                 var length = now - session.TurnStarted;
                 ResetTurn(session);
                 session.InTurn = false;
+                session.FinishedPrompt = session.Prompt ?? notice.Prompt;
                 Show(session, PetPhase.Complete, "✓", now, CompleteTime);
                 return new PetAlert(AlertKind.Complete, session.Project, "Yanıt tamamlandı", length);
             }
@@ -224,6 +248,7 @@ internal sealed class PetState
                 var length = now - session.TurnStarted;
                 ResetTurn(session);
                 session.InTurn = false;
+                session.FinishedPrompt = session.Prompt ?? notice.Prompt;
                 Show(session, PetPhase.Error, "Claude API hatası", now, ErrorTime);
                 return new PetAlert(AlertKind.Error, session.Project, "Claude API hatası", length);
             }

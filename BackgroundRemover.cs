@@ -130,28 +130,80 @@ internal static class BackgroundRemover
         }
     }
 
+    /// <summary>How the picture is fitted into the model's 320×320 input.</summary>
+    internal enum Fit
+    {
+        /// <summary>Squashed to a square, as the reference pipeline does.</summary>
+        Stretch,
+        /// <summary>Scaled to fit with its proportions kept; the rest is the neutral mean colour.</summary>
+        Letterbox
+    }
+
+    /// <summary>How the four orientation results are combined in high quality mode.</summary>
+    internal enum Merge { Mean, Max }
+
+    /// <summary>The settings used by the app. Chosen from measurements (see README, "Arka plan modeli").</summary>
+    internal static Fit FastFit { get; set; } = Fit.Stretch;
+    internal static Fit QualityFit { get; set; } = Fit.Stretch;
+    internal static Merge QualityMerge { get; set; } = Merge.Mean;
+
     /// <summary>
-    /// A mask for <paramref name="image"/>: 255 where the subject is, 0 for background.
-    /// Safe to call off the UI thread; the image is only read.
+    /// A mask for <paramref name="image"/>: 255 where the subject is, 0 for background. High
+    /// quality runs the model on the picture turned 0°, 90°, 180° and 270°, turns each result
+    /// back and combines them (about four times slower). Safe off the UI thread; the image is only read.
     /// </summary>
-    internal static byte[] Predict(PetImage image, CancellationToken cancel = default)
+    internal static byte[] Predict(PetImage image, CancellationToken cancel = default, bool highQuality = false) =>
+        highQuality
+            ? ToMask(Combine(image, QualityFit, QualityMerge, cancel))
+            : ToMask(Probability(image.Pixels, image.Width, image.Height, FastFit, cancel));
+
+    /// <summary>The four-orientation result before it becomes a mask (0–255 per pixel).</summary>
+    internal static float[] Combine(PetImage image, Fit fit, Merge merge, CancellationToken cancel = default)
+    {
+        int w = image.Width, h = image.Height;
+        var result = new float[w * h];
+        for (int turns = 0; turns < 4; turns++)
+        {
+            cancel.ThrowIfCancellationRequested();
+            var (pixels, rw, rh) = Rotate(image.Pixels, w, h, 4, turns);
+            var turned = Probability(pixels, rw, rh, fit, cancel);
+            var back = Rotate(turned, rw, rh, 1, (4 - turns) % 4).Data;
+            for (int i = 0; i < result.Length; i++)
+                result[i] = merge == Merge.Max ? Math.Max(result[i], back[i]) : result[i] + back[i] / 4f;
+        }
+        return result;
+    }
+
+    /// <summary>One run of the model: 0–255 per pixel at the picture's own size.</summary>
+    internal static float[] Probability(byte[] bgra, int width, int height, Fit fit, CancellationToken cancel = default)
     {
         var model = Session();
         cancel.ThrowIfCancellationRequested();
 
-        // Like the reference pipeline: scale to 320², divide by the brightest value, then ImageNet mean/std, RGB.
+        // Where the picture sits inside the 320×320 input.
+        int fw = Side, fh = Side;
+        if (fit == Fit.Letterbox)
+        {
+            double k = (double)Side / Math.Max(width, height);
+            fw = Math.Clamp((int)Math.Round(width * k), 1, Side);
+            fh = Math.Clamp((int)Math.Round(height * k), 1, Side);
+        }
+        int ox = (Side - fw) / 2, oy = (Side - fh) / 2;
+
+        // Like the reference pipeline: divide by the brightest value, then ImageNet mean/std, RGB.
+        // Letterbox padding is left at 0, which is the mean colour after normalisation.
         var input = new DenseTensor<float>(new[] { 1, 3, Side, Side });
-        var small = Resample(image.Pixels, image.Width, image.Height, 4, Side, Side);
+        var small = Resample(bgra, width, height, 4, fw, fh);
         float brightest = 1;
         for (int i = 0; i < small.Length; i++) if ((i & 3) != 3) brightest = Math.Max(brightest, small[i]);
-        for (int y = 0; y < Side; y++)
-        for (int x = 0; x < Side; x++)
+        for (int y = 0; y < fh; y++)
+        for (int x = 0; x < fw; x++)
         {
-            int p = (y * Side + x) * 4;
+            int p = (y * fw + x) * 4;
             float r = small[p + 2] / brightest, g = small[p + 1] / brightest, b = small[p] / brightest;
-            input[0, 0, y, x] = (r - Mean[0]) / Deviation[0];
-            input[0, 1, y, x] = (g - Mean[1]) / Deviation[1];
-            input[0, 2, y, x] = (b - Mean[2]) / Deviation[2];
+            input[0, 0, oy + y, ox + x] = (r - Mean[0]) / Deviation[0];
+            input[0, 1, oy + y, ox + x] = (g - Mean[1]) / Deviation[1];
+            input[0, 2, oy + y, ox + x] = (b - Mean[2]) / Deviation[2];
         }
         cancel.ThrowIfCancellationRequested();
 
@@ -160,29 +212,53 @@ internal static class BackgroundRemover
         var output = System.Linq.Enumerable.First(results).AsTensor<float>();
         cancel.ThrowIfCancellationRequested();
 
-        var prediction = new float[Side * Side];
+        // Normalised over the picture area only (as the reference does over its whole input).
+        var prediction = new float[fw * fh];
         float low = float.MaxValue, high = float.MinValue;
-        for (int y = 0; y < Side; y++)
-        for (int x = 0; x < Side; x++)
+        for (int y = 0; y < fh; y++)
+        for (int x = 0; x < fw; x++)
         {
-            float v = output[0, 0, y, x];
-            prediction[y * Side + x] = v;
+            float v = output[0, 0, oy + y, ox + x];
+            prediction[y * fw + x] = v;
             low = Math.Min(low, v);
             high = Math.Max(high, v);
         }
         float range = Math.Max(1e-6f, high - low);
-        var scaled = new float[Side * Side];
-        for (int i = 0; i < scaled.Length; i++) scaled[i] = (prediction[i] - low) / range * 255f;
+        for (int i = 0; i < prediction.Length; i++) prediction[i] = (prediction[i] - low) / range * 255f;
+        return Resample(prediction, fw, fh, 1, width, height);
+    }
 
-        var full = Resample(scaled, Side, Side, 1, image.Width, image.Height);
-        var mask = new byte[image.Width * image.Height];
+    /// <summary>Clean up the faint haze around the subject and settle the solid inside.</summary>
+    internal static byte[] ToMask(float[] values)
+    {
+        var mask = new byte[values.Length];
         for (int i = 0; i < mask.Length; i++)
         {
-            // Clean up the faint haze around the subject and settle the solid inside.
-            float v = full[i];
+            float v = values[i];
             mask[i] = v < 20 ? (byte)0 : v > 235 ? (byte)255 : (byte)Math.Round((v - 20) / 215f * 255f);
         }
         return mask;
+    }
+
+    /// <summary>Turns a pixel grid clockwise by <paramref name="turns"/> quarter turns.</summary>
+    internal static (T[] Data, int Width, int Height) Rotate<T>(T[] source, int width, int height, int channels, int turns)
+    {
+        turns = ((turns % 4) + 4) % 4;
+        if (turns == 0) return ((T[])source.Clone(), width, height);
+        int nw = turns == 2 ? width : height, nh = turns == 2 ? height : width;
+        var result = new T[source.Length];
+        for (int y = 0; y < height; y++)
+        for (int x = 0; x < width; x++)
+        {
+            var (nx, ny) = turns switch
+            {
+                1 => (height - 1 - y, x),
+                2 => (width - 1 - x, height - 1 - y),
+                _ => (y, width - 1 - x)
+            };
+            Array.Copy(source, (y * width + x) * channels, result, (ny * nw + nx) * channels, channels);
+        }
+        return (result, nw, nh);
     }
 
     private static float[] Resample(byte[] source, int width, int height, int channels, int toWidth, int toHeight)

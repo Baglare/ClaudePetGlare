@@ -13,6 +13,7 @@ public partial class WorkshopWindow
 {
     private Button? aiButton;
     private CancellationTokenSource? aiCancel;
+    private bool highQuality;
 
     partial void AddAutoTools()
     {
@@ -20,6 +21,15 @@ public partial class WorkshopWindow
         aiButton.ToolTip = "Fotoğraflarda konuyu bulur ve arka planı siler. Bilgisayarında çalışır; görsel hiçbir yere gönderilmez.";
         needsPicture.Add(aiButton);
         Tools.Children.Add(aiButton);
+        var quality = new CheckBox
+        {
+            Content = "Yüksek kalite (4 yönde dener, ~4 kat yavaş)", IsChecked = highQuality,
+            Foreground = (System.Windows.Media.Brush)FindResource("Soft"), Margin = new Thickness(0, 2, 0, 0),
+            ToolTip = "Fotoğrafı 0°, 90°, 180° ve 270° döndürüp ayrı ayrı çalıştırır, sonuçları birleştirir. "
+                      + "Yan çekilmiş fotoğraflarda daha tutarlı olabilir."
+        };
+        quality.Click += (_, _) => highQuality = quality.IsChecked == true;
+        Tools.Children.Add(quality);
     }
 
     private static string Megabytes => $"{BackgroundRemover.ModelBytes / 1024.0 / 1024.0:0.0} MB";
@@ -69,12 +79,12 @@ public partial class WorkshopWindow
 
             var source = image;
             long revision = image.Revision;
-            var copy = image.Save();
-            var working = new PetImage(copy.Width, copy.Height, copy.Pixels, copy.Mask);
+            var working = image.Copy();
             aiButton.Content = "Durdur";
-            Status.Text = "Arka plan aranıyor…";
+            Status.Text = highQuality ? "Arka plan aranıyor (yüksek kalite, 4 yön)…" : "Arka plan aranıyor…";
             var token = aiCancel.Token;
-            var mask = await Task.Run(() => BackgroundRemover.Predict(working, token), token);
+            bool quality = highQuality;
+            var mask = await Task.Run(() => BackgroundRemover.Predict(working, token, quality), token);
             if (!MaskStillFits(image, source, revision))
             {
                 ShowStatus("Görsel bu sırada değişti; maske uygulanmadı, tekrar dene");

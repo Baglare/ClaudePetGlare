@@ -428,6 +428,15 @@ public partial class PetWindow : Window
                 IsEnabled = false
             });
         }
+        int idle = state.IdleCount;
+        var clear = Item(idle > 0 ? $"Boştaki oturumları temizle ({idle})" : "Boştaki oturumları temizle", () =>
+        {
+            state.ClearIdle();
+            RenderStatus();
+        });
+        clear.IsEnabled = idle > 0;
+        clear.ToolTip = "Biten ve hareketsiz oturumları listeden çıkarır. Çalışan veya senden bir şey bekleyen oturumlar kalır.";
+        menu.Items.Add(clear);
         menu.Items.Add(new Separator());
         menu.Items.Add(Item("Ayarlar…", OpenSettings));
         menu.Items.Add(Item("Pet Workshop…", OpenWorkshop));
@@ -499,7 +508,7 @@ public partial class PetWindow : Window
         {
             Show();
             if (savedAnchor is { } anchor && GetWindowRect(handle, out var bounds))
-                savedAnchor = MoveIntoWorkArea(anchor, bounds);
+                savedAnchor = MoveOntoScreen(anchor, bounds);
             KeepOnTop();
         }
         else if (!visible && IsVisible) Hide();
@@ -563,7 +572,7 @@ public partial class PetWindow : Window
         var anchor = prefs.X is { } x && prefs.Y is { } y
             ? new Point(x, y)
             : new Point(work.Right - bounds.Width - 18, work.Bottom - bounds.Height - 18);
-        savedAnchor = MoveIntoWorkArea(anchor, bounds);
+        savedAnchor = MoveOntoScreen(anchor, bounds);
     }
 
     private void MoveToCorner()
@@ -572,7 +581,7 @@ public partial class PetWindow : Window
         var screen = savedAnchor is { } anchor ? Screen.FromPoint(anchor) : Screen.PrimaryScreen!;
         var work = screen.WorkingArea;
         var corner = new Point(work.Right - bounds.Width - 18, work.Bottom - bounds.Height - 18);
-        savedAnchor = MoveIntoWorkArea(corner, bounds);
+        savedAnchor = MoveOntoScreen(corner, bounds);
         SavePreferences();
     }
 
@@ -581,7 +590,7 @@ public partial class PetWindow : Window
         // Return to the saved spot when a monitor comes back; otherwise stay on a visible screen.
         if (!GetWindowRect(handle, out var bounds)) return;
         var anchor = prefs.X is { } x && prefs.Y is { } y ? new Point(x, y) : savedAnchor;
-        if (anchor is { } point) savedAnchor = MoveIntoWorkArea(point, bounds);
+        if (anchor is { } point) savedAnchor = MoveOntoScreen(point, bounds);
     });
 
     private void StartDrag(object sender, MouseButtonEventArgs e)
@@ -626,11 +635,14 @@ public partial class PetWindow : Window
 
         var anchor = CurrentAnchor(bounds);
         if (prefs.SnapToEdges) anchor = Snap(anchor, bounds);
-        savedAnchor = MoveIntoWorkArea(anchor, bounds);
+        savedAnchor = MoveOntoScreen(anchor, bounds);
         SavePreferences();
     }
 
-    /// <summary>Moves the mascot flush against a work-area edge it was dropped close to.</summary>
+    /// <summary>
+    /// Moves the mascot against an edge it was dropped close to: the monitor's real edge (flush)
+    /// or the taskbar's edge, whichever is nearer.
+    /// </summary>
     private Point Snap(Point anchor, Bounds bounds)
     {
         var dpi = VisualTreeHelper.GetDpi(this);
@@ -645,13 +657,39 @@ public partial class PetWindow : Window
         int mascotRight = anchor.X + bounds.Width - rightMargin;
         int mascotLeft = mascotRight - mascotWidth;
         int mascotBottom = anchor.Y + bounds.Height - bottomMargin;
-        var work = Screen.FromPoint(new Point(mascotLeft + mascotWidth / 2, mascotBottom - mascotWidth / 2)).WorkingArea;
-
-        if (Math.Abs(mascotLeft - work.Left) <= reach) anchor.X += work.Left + gap - mascotLeft;
-        else if (Math.Abs(work.Right - mascotRight) <= reach) anchor.X += work.Right - gap - mascotRight;
-        if (Math.Abs(work.Bottom - mascotBottom) <= reach) anchor.Y += work.Bottom - gap - mascotBottom;
-        else if (Math.Abs(anchor.Y - work.Top) <= reach) anchor.Y = work.Top;
+        var screen = Screen.FromPoint(new Point(mascotLeft + mascotWidth / 2, mascotBottom - mascotWidth / 2));
+        var (dx, dy, top) = SnapOffsets(mascotLeft, mascotRight, mascotBottom, anchor.Y, screen.Bounds, screen.WorkingArea, reach, gap);
+        anchor.X += dx;
+        anchor.Y = top ?? anchor.Y + dy;
         return anchor;
+    }
+
+    /// <summary>
+    /// How far to move the mascot to rest on a nearby edge. Screen edges are flush; taskbar edges
+    /// (where the work area stops short of the screen) keep a small gap. Null top means no top snap.
+    /// </summary>
+    internal static (int Dx, int Dy, int? Top) SnapOffsets(int mascotLeft, int mascotRight, int mascotBottom, int windowTop,
+        Rectangle screen, Rectangle work, int reach, int gap)
+    {
+        static int? Nearest(int value, int reach, params int[] targets)
+        {
+            int? best = null;
+            foreach (int target in targets)
+                if (Math.Abs(target - value) <= reach && (best is null || Math.Abs(target - value) < Math.Abs(best.Value - value)))
+                    best = target;
+            return best;
+        }
+        int dx = 0, dy = 0;
+        int? top = null;
+        var leftTargets = work.Left > screen.Left ? new[] { screen.Left, work.Left + gap } : new[] { screen.Left };
+        var rightTargets = work.Right < screen.Right ? new[] { screen.Right, work.Right - gap } : new[] { screen.Right };
+        var bottomTargets = work.Bottom < screen.Bottom ? new[] { screen.Bottom, work.Bottom - gap } : new[] { screen.Bottom };
+        var topTargets = work.Top > screen.Top ? new[] { screen.Top, work.Top } : new[] { screen.Top };
+        if (Nearest(mascotLeft, reach, leftTargets) is { } left) dx = left - mascotLeft;
+        else if (Nearest(mascotRight, reach, rightTargets) is { } right) dx = right - mascotRight;
+        if (Nearest(mascotBottom, reach, bottomTargets) is { } bottom) dy = bottom - mascotBottom;
+        else if (Nearest(windowTop, reach, topTargets) is { } t) top = t;
+        return (dx, dy, top);
     }
 
     private Point CurrentAnchor(Bounds bounds) => new(
@@ -691,7 +729,7 @@ public partial class PetWindow : Window
         if (!GetWindowRect(handle, out var updated)) return;
         anchor.X += old.Width - updated.Width;
         anchor.Y += old.Height - updated.Height;
-        savedAnchor = MoveIntoWorkArea(anchor, updated);
+        savedAnchor = MoveOntoScreen(anchor, updated);
     }
 
     private void ApplySize()
@@ -712,7 +750,8 @@ public partial class PetWindow : Window
         prefs.Save();
     }
 
-    private Point MoveIntoWorkArea(Point anchor, Bounds bounds)
+    /// <summary>Keeps the mascot on the monitor it is over. The whole monitor counts, taskbar included.</summary>
+    private Point MoveOntoScreen(Point anchor, Bounds bounds)
     {
         var dpi = VisualTreeHelper.GetDpi(this);
         var mascot = Pet.Mascot;
@@ -723,15 +762,15 @@ public partial class PetWindow : Window
         var mascotCenter = new Point(
             anchor.X + leftInset + (int)Math.Round(mascotWidth * dpi.DpiScaleX / 2),
             anchor.Y + bounds.Height - (int)Math.Round((mascotHeight / 2 + mascot.Margin.Bottom) * dpi.DpiScaleY));
-        var work = Screen.FromPoint(mascotCenter).WorkingArea;
-        var placement = ConstrainPlacement(anchor, work, bounds.Width, bounds.Height, leftInset);
+        var area = Screen.FromPoint(mascotCenter).Bounds;
+        var placement = ConstrainPlacement(anchor, area, bounds.Width, bounds.Height, leftInset);
         Pet.MascotOffset.X = (placement.Anchor.X - placement.Window.X) / dpi.DpiScaleX;
         Pet.UpdateBubblePlacement();
         Move(placement.Window);
         return placement.Anchor;
     }
 
-    private static (Point Anchor, Point Window) ConstrainPlacement(
+    internal static (Point Anchor, Point Window) ConstrainPlacement(
         Point anchor, Rectangle work, int width, int height, int leftInset)
     {
         // Keep the original window origin in saved positions, including when the

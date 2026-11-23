@@ -18,7 +18,7 @@ namespace Petglare;
 /// </summary>
 public partial class WorkshopWindow : Window
 {
-    private enum Tool { Erase, Restore, Wand, Crop }
+    private enum Tool { Erase, Restore, Wand, Pick, Protect, Crop }
 
     private const int UndoLimit = 20;
     private static readonly string[] OpenFilter =
@@ -36,7 +36,9 @@ public partial class WorkshopWindow : Window
     private WriteableBitmap? bitmap;
     private Tool tool = Tool.Erase;
     private double brushSize = 36, hardness = 80;
-    private int tolerance = 24;
+    private int tolerance = PetImage.DefaultTolerance;
+    private bool unprotect;
+    private readonly List<FrameworkElement> protectOnly = new();
     private bool contiguous = true;
     private bool dirty;
     private bool painting, panning, spaceDown;
@@ -83,6 +85,8 @@ public partial class WorkshopWindow : Window
                      ("Silgi", Tool.Erase, "Sürükleyerek sil (E)"),
                      ("Geri getir", Tool.Restore, "Silinen yeri geri boya (R)"),
                      ("Sihirli değnek", Tool.Wand, "Tıklanan renk bölgesini sil (W)"),
+                     ("Renk seç", Tool.Pick, "Silinecek arka plan rengini seç (P)"),
+                     ("Koru", Tool.Protect, "Renkten silmenin dokunmayacağı yeri boya (K)"),
                      ("Kırp", Tool.Crop, "Tutmak istediğin alanı çiz (C)")
                  })
         {
@@ -102,8 +106,16 @@ public partial class WorkshopWindow : Window
 
         brushOnly.Add(SliderRow("Fırça boyutu", 2, 200, brushSize, v => $"{v} px", v => { brushSize = v; MoveRing(); }));
         brushOnly.Add(SliderRow("Sertlik", 0, 100, hardness, v => $"%{v}", v => hardness = v));
-        // Used by the wand and by edge removal, so it stays visible.
-        SliderRow("Renk toleransı", 0, 100, tolerance, v => $"%{v}", v => tolerance = v);
+        var removeProtection = new CheckBox { Content = "Korumayı kaldır", IsChecked = unprotect,
+            Foreground = (Brush)FindResource("Soft"), Margin = new Thickness(0, 8, 0, 0) };
+        removeProtection.Click += (_, _) => unprotect = removeProtection.IsChecked == true;
+        Tools.Children.Add(removeProtection);
+        protectOnly.Add(removeProtection);
+        // Used by the wand and by edge removal, so it stays visible. Measured in perceptual
+        // colour difference (CIELAB ΔE): a few units already tell clearly different colours apart.
+        SliderRow("Renk toleransı", 0, PetImage.MaxTolerance, tolerance, v => $"%{v}", v => { tolerance = v; SchedulePreview(); });
+        Tools.Children.Add(new TextBlock { Text = "Düşük: yalnız çok benzer tonlar. Önizleme açıkken sürgü sonucu canlı gösterir.",
+            Foreground = (Brush)FindResource("Muted"), FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 0) });
         var adjacent = new CheckBox { Content = "Yalnız bitişik pikseller", IsChecked = contiguous,
             Foreground = (Brush)FindResource("Soft"), Margin = new Thickness(0, 8, 0, 0) };
         adjacent.Click += (_, _) => contiguous = adjacent.IsChecked == true;
@@ -111,8 +123,7 @@ public partial class WorkshopWindow : Window
         wandOnly.Add(adjacent);
 
         Heading("Otomatik arka plan");
-        AddButtons(("Kenardan sil (düz arka plan)", (_, _) => Apply(i => i.EdgeErase(tolerance) > 0,
-            "Arka plan silindi", "Kenarda silinecek düz bir renk bulunamadı"), true));
+        AddBackgroundTools();
         AddAutoTools();
 
         Heading("Kenar");
@@ -192,16 +203,22 @@ public partial class WorkshopWindow : Window
     private void SelectTool(Tool chosen)
     {
         tool = chosen;
-        foreach (var element in brushOnly) element.Visibility = chosen is Tool.Erase or Tool.Restore ? Visibility.Visible : Visibility.Collapsed;
+        bool brush = chosen is Tool.Erase or Tool.Restore or Tool.Protect;
+        foreach (var element in brushOnly) element.Visibility = brush ? Visibility.Visible : Visibility.Collapsed;
+        foreach (var element in protectOnly) element.Visibility = chosen == Tool.Protect ? Visibility.Visible : Visibility.Collapsed;
         foreach (var element in wandOnly) element.Visibility = chosen == Tool.Wand ? Visibility.Visible : Visibility.Collapsed;
         foreach (var option in FindTools()) option.IsChecked = (Tool)option.Tag == chosen;
-        Viewport.Cursor = chosen is Tool.Erase or Tool.Restore ? Cursors.None : Cursors.Cross;
+        Viewport.Cursor = brush ? Cursors.None : Cursors.Cross;
+        // The protected area is tinted only while it matters.
+        if (image is not null) Refresh(new Int32Rect(0, 0, image.Width, image.Height));
         BrushRing.Visibility = Visibility.Collapsed;
         Hint.Text = chosen switch
         {
             Tool.Erase => "Sürükleyerek sil · [ ] fırça boyutu · tekerlek yakınlaştırır · sağ tık veya Boşluk ile kaydır",
             Tool.Restore => "Silinen yeri geri boya · [ ] fırça boyutu · sağ tık veya Boşluk ile kaydır",
             Tool.Wand => "Silmek istediğin renge tıkla · tolerans benzer renkleri de alır",
+            Tool.Pick => "Arka plan rengine tıkla · birden çok renk seçebilirsin; önizleme açılır",
+            Tool.Protect => "Korunacak yeri boya (yeşil) · renkten silme ve yapay zekâ buraya dokunmaz",
             _ => "Tutmak istediğin alanı sürükleyerek çiz"
         };
     }
@@ -304,6 +321,9 @@ public partial class WorkshopWindow : Window
 
     private void Load(PetImage picture, bool fresh)
     {
+        EndPreview();
+        picked.Clear();
+        RebuildChips();
         image = picture;
         undo.Clear();
         redo.Clear();
@@ -337,14 +357,27 @@ public partial class WorkshopWindow : Window
         if (x1 <= x0 || y1 <= y0) return;
         int w = x1 - x0, h = y1 - y0;
         var buffer = new byte[w * h * 4];
+        var removal = previewRemove;
+        bool showProtect = tool == Tool.Protect || removal is not null;
         for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++)
         {
             int i = (y0 + y) * image.Width + x0 + x, o = (y * w + x) * 4;
-            buffer[o] = image.Pixels[i * 4];
-            buffer[o + 1] = image.Pixels[i * 4 + 1];
-            buffer[o + 2] = image.Pixels[i * 4 + 2];
-            buffer[o + 3] = image.Mask[i];
+            int b = image.Pixels[i * 4], g = image.Pixels[i * 4 + 1], r = image.Pixels[i * 4 + 2], a = image.Mask[i];
+            if (removal is not null && removal[i])
+            {
+                // Would be erased: shown pink and solid so it reads on any backdrop.
+                (r, g, b, a) = ((r + 255 * 2) / 3, (g + 40 * 2) / 3, (b + 170 * 2) / 3, 255);
+            }
+            else if (showProtect && image.Protect[i] != 0)
+            {
+                (r, g, b) = ((r + 80) / 2, (g + 230) / 2, (b + 150) / 2);
+                a = Math.Max(a, 160);
+            }
+            buffer[o] = (byte)b;
+            buffer[o + 1] = (byte)g;
+            buffer[o + 2] = (byte)r;
+            buffer[o + 3] = (byte)a;
         }
         bitmap.WritePixels(new Int32Rect(x0, y0, w, h), buffer, w * 4, 0);
     }
@@ -445,7 +478,7 @@ public partial class WorkshopWindow : Window
         var p = ToImage(at);
         switch (tool)
         {
-            case Tool.Erase or Tool.Restore:
+            case Tool.Erase or Tool.Restore or Tool.Protect:
                 Remember();
                 painting = true;
                 lastImagePoint = p;
@@ -454,6 +487,9 @@ public partial class WorkshopWindow : Window
                 break;
             case Tool.Wand:
                 Apply(i => i.FloodErase((int)p.X, (int)p.Y, tolerance, contiguous) > 0, null, "Bu renkte silinecek piksel yok");
+                break;
+            case Tool.Pick:
+                PickColor((int)p.X, (int)p.Y);
                 break;
             case Tool.Crop:
                 painting = true;
@@ -477,7 +513,7 @@ public partial class WorkshopWindow : Window
         MoveRing(at);
         if (!painting || image is null) return;
         var p = ToImage(at);
-        if (tool is Tool.Erase or Tool.Restore)
+        if (tool is Tool.Erase or Tool.Restore or Tool.Protect)
         {
             Paint(lastImagePoint, p);
             lastImagePoint = p;
@@ -511,6 +547,7 @@ public partial class WorkshopWindow : Window
         dirty = true;
         UpdateResult();
         UpdateState();
+        SchedulePreview();
     }
 
     private Point Clamp(Point p) => image is null ? p
@@ -520,7 +557,10 @@ public partial class WorkshopWindow : Window
     {
         if (image is null) return;
         double radius = brushSize / 2;
-        if (!image.Stroke(from, to, radius, hardness / 100.0, tool == Tool.Erase)) return;
+        bool changed = tool == Tool.Protect
+            ? image.ProtectStroke(from, to, radius, !unprotect)
+            : image.Stroke(from, to, radius, hardness / 100.0, tool == Tool.Erase);
+        if (!changed) return;
         int pad = (int)Math.Ceiling(radius) + 2;
         Refresh(new Int32Rect((int)Math.Min(from.X, to.X) - pad, (int)Math.Min(from.Y, to.Y) - pad,
             (int)Math.Abs(to.X - from.X) + pad * 2, (int)Math.Abs(to.Y - from.Y) + pad * 2));
@@ -542,7 +582,7 @@ public partial class WorkshopWindow : Window
     private void MoveRing(Point? at = null)
     {
         if (at is { } point) ringAt = point;
-        if (image is null || tool is not (Tool.Erase or Tool.Restore) || panning || !Viewport.IsMouseOver)
+        if (image is null || tool is not (Tool.Erase or Tool.Restore or Tool.Protect) || panning || !Viewport.IsMouseOver)
         {
             BrushRing.Visibility = Visibility.Collapsed;
             return;
@@ -572,6 +612,9 @@ public partial class WorkshopWindow : Window
             case Key.R when !ctrl: SelectTool(Tool.Restore); break;
             case Key.W when !ctrl: SelectTool(Tool.Wand); break;
             case Key.C when !ctrl: SelectTool(Tool.Crop); break;
+            case Key.P when !ctrl: SelectTool(Tool.Pick); break;
+            case Key.K when !ctrl: SelectTool(Tool.Protect); break;
+            case Key.Escape when Previewing: EndPreview("Önizleme kapatıldı"); break;
             case Key.Space: spaceDown = true; break;
             default: return;
         }
@@ -618,6 +661,7 @@ public partial class WorkshopWindow : Window
         }
         if (done is not null) ShowStatus(done);
         UpdateState();
+        SchedulePreview();
     }
 
     private void Undo() => Step(undo, redo, "Geri alındı");
@@ -636,6 +680,7 @@ public partial class WorkshopWindow : Window
         else { Refresh(new Int32Rect(0, 0, image.Width, image.Height)); UpdateResult(); }
         ShowStatus(message);
         UpdateState();
+        SchedulePreview();
     }
 
     private void ResetAll()

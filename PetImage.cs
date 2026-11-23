@@ -36,15 +36,19 @@ internal sealed class PetImage
     internal byte[] Pixels { get; private set; }
     /// <summary>One byte per pixel: 0 erased, 255 kept.</summary>
     internal byte[] Mask { get; private set; }
+    /// <summary>One byte per pixel: 1 where the user marked "keep"; colour tools and the background model leave it alone.</summary>
+    internal byte[] Protect { get; private set; }
 
-    internal PetImage(int width, int height, byte[] pixels, byte[] mask)
+    internal PetImage(int width, int height, byte[] pixels, byte[] mask, byte[]? protect = null)
     {
-        if (width <= 0 || height <= 0 || pixels.Length != width * height * 4 || mask.Length != width * height)
+        if (width <= 0 || height <= 0 || pixels.Length != width * height * 4 || mask.Length != width * height
+            || (protect is not null && protect.Length != width * height))
             throw new ArgumentException("Bozuk görsel verisi.");
         Width = width;
         Height = height;
         Pixels = pixels;
         Mask = mask;
+        Protect = protect ?? new byte[width * height];
     }
 
     // ───────────────────────────── Loading and saving ─────────────────────────────
@@ -217,9 +221,12 @@ internal sealed class PetImage
 
     // ───────────────────────────── Undo ─────────────────────────────
 
-    internal sealed record Snapshot(int Width, int Height, byte[] Pixels, byte[] Mask);
+    internal sealed record Snapshot(int Width, int Height, byte[] Pixels, byte[] Mask, byte[] Protect);
 
-    internal Snapshot Save() => new(Width, Height, (byte[])Pixels.Clone(), (byte[])Mask.Clone());
+    internal Snapshot Save() => new(Width, Height, (byte[])Pixels.Clone(), (byte[])Mask.Clone(), (byte[])Protect.Clone());
+
+    /// <summary>An independent copy (for work off the UI thread).</summary>
+    internal PetImage Copy() => new(Width, Height, (byte[])Pixels.Clone(), (byte[])Mask.Clone(), (byte[])Protect.Clone());
 
     internal void Restore(Snapshot snapshot)
     {
@@ -228,6 +235,8 @@ internal sealed class PetImage
         Height = snapshot.Height;
         Pixels = (byte[])snapshot.Pixels.Clone();
         Mask = (byte[])snapshot.Mask.Clone();
+        Protect = (byte[])snapshot.Protect.Clone();
+        lab = null;
     }
 
     // ───────────────────────────── Brushes ─────────────────────────────
@@ -273,57 +282,175 @@ internal sealed class PetImage
         return changed;
     }
 
+    // ───────────────────────────── Protection ─────────────────────────────
+
+    /// <summary>Marks (or unmarks) a round area the colour tools and the background model must keep.</summary>
+    internal bool ProtectDab(double cx, double cy, double radius, bool add)
+    {
+        Touch();
+        radius = Math.Max(0.5, radius);
+        int x0 = Math.Max(0, (int)Math.Floor(cx - radius)), x1 = Math.Min(Width - 1, (int)Math.Ceiling(cx + radius));
+        int y0 = Math.Max(0, (int)Math.Floor(cy - radius)), y1 = Math.Min(Height - 1, (int)Math.Ceiling(cy + radius));
+        bool changed = false;
+        byte value = add ? (byte)1 : (byte)0;
+        for (int y = y0; y <= y1; y++)
+        for (int x = x0; x <= x1; x++)
+        {
+            if ((x + 0.5 - cx) * (x + 0.5 - cx) + (y + 0.5 - cy) * (y + 0.5 - cy) > radius * radius) continue;
+            int i = y * Width + x;
+            if (Protect[i] != value) { Protect[i] = value; changed = true; }
+        }
+        return changed;
+    }
+
+    internal bool ProtectStroke(Point from, Point to, double radius, bool add)
+    {
+        double length = (to - from).Length;
+        int steps = Math.Max(1, (int)Math.Ceiling(length / Math.Max(1, radius / 3)));
+        bool changed = false;
+        for (int s = 0; s <= steps; s++)
+        {
+            double t = (double)s / steps;
+            changed |= ProtectDab(from.X + (to.X - from.X) * t, from.Y + (to.Y - from.Y) * t, radius, add);
+        }
+        return changed;
+    }
+
+    internal bool HasProtection => Array.IndexOf(Protect, (byte)1) >= 0;
+
     // ───────────────────────────── Colour tools ─────────────────────────────
 
-    /// <summary>Largest per-channel difference between two pixels, 0–255.</summary>
-    private int Distance(int a, int b)
+    /// <summary>A colour in CIELAB (D65), where distance follows what the eye sees.</summary>
+    internal readonly record struct LabColor(float L, float A, float B)
     {
-        int pa = a * 4, pb = b * 4;
-        return Math.Max(Math.Abs(Pixels[pa] - Pixels[pb]),
-            Math.Max(Math.Abs(Pixels[pa + 1] - Pixels[pb + 1]), Math.Abs(Pixels[pa + 2] - Pixels[pb + 2])));
+        /// <summary>CIE76 ΔE: about 2 is barely visible, 10 clearly different.</summary>
+        internal float DistanceTo(LabColor o) =>
+            MathF.Sqrt((L - o.L) * (L - o.L) + (A - o.A) * (A - o.A) + (B - o.B) * (B - o.B));
     }
 
-    private int Distance(int a, (byte B, byte G, byte R) color)
+    /// <summary>Default and range of the colour tolerance, in ΔE.</summary>
+    internal const int DefaultTolerance = 6, MaxTolerance = 40;
+
+    private float[]? lab;
+
+    private static readonly float[] Linear = Enumerable.Range(0, 256).Select(v =>
     {
-        int p = a * 4;
-        return Math.Max(Math.Abs(Pixels[p] - color.B), Math.Max(Math.Abs(Pixels[p + 1] - color.G), Math.Abs(Pixels[p + 2] - color.R)));
+        double c = v / 255.0;
+        return (float)(c <= 0.04045 ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4));
+    }).ToArray();
+
+    internal static LabColor ToLab(byte r, byte g, byte b)
+    {
+        float lr = Linear[r], lg = Linear[g], lb = Linear[b];
+        float x = (0.4124f * lr + 0.3576f * lg + 0.1805f * lb) / 0.95047f;
+        float y = 0.2126f * lr + 0.7152f * lg + 0.0722f * lb;
+        float z = (0.0193f * lr + 0.1192f * lg + 0.9505f * lb) / 1.08883f;
+        static float F(float t) => t > 0.008856f ? MathF.Cbrt(t) : 7.787f * t + 16f / 116f;
+        float fx = F(x), fy = F(y), fz = F(z);
+        return new LabColor(116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz));
     }
 
-    /// <summary>Tolerance 0–100 to a channel difference.</summary>
-    private static int Limit(int tolerance) => (int)Math.Round(Math.Clamp(tolerance, 0, 100) * 2.55);
+    /// <summary>Lab of every pixel, computed once per picture state.</summary>
+    private float[] LabPixels()
+    {
+        if (lab is { } cached && cached.Length == Width * Height * 3) return cached;
+        var result = new float[Width * Height * 3];
+        for (int i = 0, p = 0; i < Width * Height; i++, p += 4)
+        {
+            var c = ToLab(Pixels[p + 2], Pixels[p + 1], Pixels[p]);
+            result[i * 3] = c.L; result[i * 3 + 1] = c.A; result[i * 3 + 2] = c.B;
+        }
+        return lab = result;
+    }
+
+    internal LabColor LabAt(int i)
+    {
+        var l = LabPixels();
+        return new LabColor(l[i * 3], l[i * 3 + 1], l[i * 3 + 2]);
+    }
+
+    /// <summary>The average colour of a 3×3 patch, for picking a background colour.</summary>
+    internal LabColor SampleColor(int x, int y)
+    {
+        float sl = 0, sa = 0, sb = 0;
+        int n = 0;
+        for (int dy = -1; dy <= 1; dy++)
+        for (int dx = -1; dx <= 1; dx++)
+        {
+            int px = Math.Clamp(x + dx, 0, Width - 1), py = Math.Clamp(y + dy, 0, Height - 1);
+            var c = LabAt(py * Width + px);
+            sl += c.L; sa += c.A; sb += c.B; n++;
+        }
+        return new LabColor(sl / n, sa / n, sb / n);
+    }
+
+    internal (byte R, byte G, byte B) RgbAt(int x, int y)
+    {
+        int p = (Math.Clamp(y, 0, Height - 1) * Width + Math.Clamp(x, 0, Width - 1)) * 4;
+        return (Pixels[p + 2], Pixels[p + 1], Pixels[p]);
+    }
+
+    private bool Near(int i, IReadOnlyList<LabColor> colors, float limit)
+    {
+        var l = LabPixels();
+        var c = new LabColor(l[i * 3], l[i * 3 + 1], l[i * 3 + 2]);
+        for (int k = 0; k < colors.Count; k++) if (c.DistanceTo(colors[k]) <= limit) return true;
+        return false;
+    }
 
     /// <summary>
-    /// Magic wand: erases the colour under (x, y). Contiguous follows only touching pixels;
-    /// otherwise every similar pixel goes. Returns how many pixels were erased.
+    /// Which pixels the magic wand would erase for a click at (x, y), without changing anything.
+    /// Tolerance is a ΔE; protected pixels are never included.
     /// </summary>
-    internal int FloodErase(int x, int y, int tolerance, bool contiguous)
+    internal bool[] WandRemoval(int x, int y, double tolerance, bool contiguous)
     {
-        if (x < 0 || y < 0 || x >= Width || y >= Height) return 0;
-        Touch();
-        int seed = y * Width + x, limit = Limit(tolerance), count = 0;
+        var remove = new bool[Width * Height];
+        if (x < 0 || y < 0 || x >= Width || y >= Height) return remove;
+        var colors = new[] { LabAt(y * Width + x) };
+        float limit = (float)Math.Clamp(tolerance, 0, 100);
         if (!contiguous)
         {
-            for (int i = 0; i < Mask.Length; i++)
-                if (Mask[i] != 0 && Distance(i, seed) <= limit) { Mask[i] = 0; count++; }
-            return count;
+            for (int i = 0; i < remove.Length; i++)
+                remove[i] = Mask[i] != 0 && Protect[i] == 0 && Near(i, colors, limit);
+            return remove;
         }
-        var color = (Pixels[seed * 4], Pixels[seed * 4 + 1], Pixels[seed * 4 + 2]);
-        return Fill(new[] { seed }, i => Distance(i, color) <= limit);
+        Flood(new[] { y * Width + x }, i => Near(i, colors, limit), remove);
+        return remove;
     }
 
     /// <summary>
-    /// Removes a plain background: starts at the picture's edges and erases inward while the
-    /// colour stays close to one of the edge's main colours.
+    /// Which pixels the background remover would erase, without changing anything: from the
+    /// picture's edges inward while the colour stays within <paramref name="tolerance"/> (ΔE) of
+    /// one of <paramref name="colors"/> (the edge's main colours when none are picked).
     /// </summary>
-    internal int EdgeErase(int tolerance)
+    internal bool[] EdgeRemoval(double tolerance, IReadOnlyList<LabColor>? colors = null)
     {
-        Touch();
-        int limit = Limit(tolerance);
+        var remove = new bool[Width * Height];
         var edge = EdgeIndexes().ToArray();
-        var colors = MainColors(edge);
-        bool Background(int i) => colors.Any(c => Distance(i, c) <= limit);
-        return Fill(edge.Where(Background), Background);
+        var targets = colors is { Count: > 0 } ? colors : EdgeColors();
+        if (targets.Count == 0) return remove;
+        float limit = (float)Math.Clamp(tolerance, 0, 100);
+        Flood(edge, i => Near(i, targets, limit), remove);
+        return remove;
     }
+
+    /// <summary>Erases the given pixels (one undoable step). Returns how many were kept before.</summary>
+    internal int Erase(bool[] remove)
+    {
+        if (remove.Length != Mask.Length) throw new ArgumentException("Seçim boyutu uyuşmuyor.");
+        Touch();
+        int count = 0;
+        for (int i = 0; i < Mask.Length; i++)
+            if (remove[i] && Mask[i] != 0 && Protect[i] == 0) { Mask[i] = 0; count++; }
+        return count;
+    }
+
+    internal int FloodErase(int x, int y, double tolerance, bool contiguous) => Erase(WandRemoval(x, y, tolerance, contiguous));
+
+    internal int EdgeErase(double tolerance, IReadOnlyList<LabColor>? colors = null) => Erase(EdgeRemoval(tolerance, colors));
+
+    /// <summary>Pixels at least half kept.</summary>
+    internal int KeptCount() => Mask.Count(m => m >= 128);
 
     private IEnumerable<int> EdgeIndexes()
     {
@@ -331,11 +458,11 @@ internal sealed class PetImage
         for (int y = 1; y < Height - 1; y++) { yield return y * Width; if (Width > 1) yield return y * Width + Width - 1; }
     }
 
-    /// <summary>The colours that make up most of the edge (coarse buckets, each at least 10% of it).</summary>
-    private List<(byte B, byte G, byte R)> MainColors(int[] edge)
+    /// <summary>The colours that make up most of the edge (coarse buckets, each at least 10% of it), in Lab.</summary>
+    internal List<LabColor> EdgeColors()
     {
         var buckets = new Dictionary<int, (long B, long G, long R, int N)>();
-        foreach (int i in edge)
+        foreach (int i in EdgeIndexes())
         {
             if (Mask[i] == 0) continue;
             int p = i * 4;
@@ -345,30 +472,34 @@ internal sealed class PetImage
         }
         int total = buckets.Values.Sum(b => b.N);
         return buckets.Values.Where(b => b.N * 10 >= total).OrderByDescending(b => b.N).Take(4)
-            .Select(b => ((byte)(b.B / b.N), (byte)(b.G / b.N), (byte)(b.R / b.N))).ToList();
+            .Select(b => ToLab((byte)(b.R / b.N), (byte)(b.G / b.N), (byte)(b.B / b.N))).ToList();
     }
 
-    /// <summary>Erases, four-way, every reachable kept pixel that passes <paramref name="include"/>.</summary>
-    private int Fill(IEnumerable<int> seeds, Func<int, bool> include)
+    /// <summary>
+    /// Four-way flood from the seeds. Kept pixels that pass <paramref name="include"/> are marked;
+    /// already erased pixels are passed through but not marked; protected pixels stop the flood.
+    /// </summary>
+    private void Flood(IEnumerable<int> seeds, Func<int, bool> include, bool[] remove)
     {
         var seen = new bool[Mask.Length];
         var queue = new Queue<int>();
         foreach (int s in seeds)
             if (!seen[s]) { seen[s] = true; queue.Enqueue(s); }
-        int count = 0;
         while (queue.Count > 0)
         {
             int i = queue.Dequeue();
-            if (Mask[i] == 0 || !include(i)) continue;
-            Mask[i] = 0;
-            count++;
+            if (Protect[i] != 0) continue;
+            if (Mask[i] != 0)
+            {
+                if (!include(i)) continue;
+                remove[i] = true;
+            }
             int x = i % Width;
             if (x > 0 && !seen[i - 1]) { seen[i - 1] = true; queue.Enqueue(i - 1); }
             if (x < Width - 1 && !seen[i + 1]) { seen[i + 1] = true; queue.Enqueue(i + 1); }
             if (i >= Width && !seen[i - Width]) { seen[i - Width] = true; queue.Enqueue(i - Width); }
             if (i + Width < Mask.Length && !seen[i + Width]) { seen[i + Width] = true; queue.Enqueue(i + Width); }
         }
-        return count;
     }
 
     // ───────────────────────────── Edges ─────────────────────────────
@@ -445,12 +576,15 @@ internal sealed class PetImage
         Touch();
         var pixels = new byte[w * h * 4];
         var mask = new byte[w * h];
+        var protect = new byte[w * h];
         for (int y = 0; y < h; y++)
         {
             Buffer.BlockCopy(Pixels, ((y0 + y) * Width + x0) * 4, pixels, y * w * 4, w * 4);
             Buffer.BlockCopy(Mask, (y0 + y) * Width + x0, mask, y * w, w);
+            Buffer.BlockCopy(Protect, (y0 + y) * Width + x0, protect, y * w, w);
         }
-        (Width, Height, Pixels, Mask) = (w, h, pixels, mask);
+        (Width, Height, Pixels, Mask, Protect) = (w, h, pixels, mask, protect);
+        lab = null;
         return true;
     }
 
@@ -469,25 +603,30 @@ internal sealed class PetImage
         int w = Height, h = Width;
         var pixels = new byte[Pixels.Length];
         var mask = new byte[Mask.Length];
+        var protect = new byte[Mask.Length];
         for (int y = 0; y < Height; y++)
         for (int x = 0; x < Width; x++)
         {
             int nx = Height - 1 - y, ny = x;
             int from = y * Width + x, to = ny * w + nx;
             mask[to] = Mask[from];
+            protect[to] = Protect[from];
             Buffer.BlockCopy(Pixels, from * 4, pixels, to * 4, 4);
         }
-        (Width, Height, Pixels, Mask) = (w, h, pixels, mask);
+        (Width, Height, Pixels, Mask, Protect) = (w, h, pixels, mask, protect);
+        lab = null;
     }
 
     internal void FlipHorizontal()
     {
         Touch();
+        lab = null;
         for (int y = 0; y < Height; y++)
         for (int x = 0; x < Width / 2; x++)
         {
             int a = y * Width + x, b = y * Width + Width - 1 - x;
             (Mask[a], Mask[b]) = (Mask[b], Mask[a]);
+            (Protect[a], Protect[b]) = (Protect[b], Protect[a]);
             for (int c = 0; c < 4; c++) (Pixels[a * 4 + c], Pixels[b * 4 + c]) = (Pixels[b * 4 + c], Pixels[a * 4 + c]);
         }
     }
@@ -497,6 +636,7 @@ internal sealed class PetImage
     {
         if (mask.Length != Mask.Length) throw new ArgumentException("Maske boyutu uyuşmuyor.");
         Touch();
-        for (int i = 0; i < Mask.Length; i++) Mask[i] = (byte)(Mask[i] * mask[i] / 255);
+        for (int i = 0; i < Mask.Length; i++)
+            if (Protect[i] == 0) Mask[i] = (byte)(Mask[i] * mask[i] / 255);
     }
 }

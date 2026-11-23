@@ -21,6 +21,7 @@ internal static class Tests
     [STAThread]
     static int Main(string[] args)
     {
+        if (args.Length == 4 && args[0] == "--bench") return Bench.Run(args[1], args[2], args[3]);
         // Parsing
         var edit = Parse(new { hook_event_name = "PreToolUse", session_id = "s1", cwd = @"C:\Projeler\VoxForge", tool_name = "Edit", tool_input = new { file_path = @"C:\Projeler\VoxForge\App.cs" } });
         Check(edit is { Event: HookEvent.Tool, Tool: ToolKind.Edit, FileName: "App.cs", Project: "VoxForge" }, "edit parsed with project and file");
@@ -206,6 +207,100 @@ internal static class Tests
         Check(unk.Focus is { Phase: PetPhase.Working } && unkSession.Waits.Count == 0, "the edit result ends it");
         unk.Apply(U(HookEvent.Permission, ToolKind.Other, null), ut += TimeSpan.FromSeconds(1));
         Check(unkSession.Tools.Values.All(t => t.Waiting is null), "an unnamed permission is not pinned on the running read");
+
+        // v1.1: a finished turn stays finished; idle sessions can be cleared; timeouts unchanged
+        var late = new PetState();
+        var lt = TimeSpan.Zero;
+        late.Apply(new HookNotice(HookEvent.Prompt, "late", "p1", Project: "L"), lt);
+        late.Apply(new HookNotice(HookEvent.Tool, "late", "p1", ToolKind.Command, Project: "L", ToolUse: "t1"), lt += TimeSpan.FromSeconds(1));
+        late.Apply(new HookNotice(HookEvent.Stop, "late", "p1", Project: "L"), lt += TimeSpan.FromSeconds(1));
+        late.Apply(new HookNotice(HookEvent.ToolDone, "late", "p1", ToolKind.Command, Project: "L", ToolUse: "t1"), lt += TimeSpan.FromMilliseconds(50));
+        Check(late.Focus?.Phase == PetPhase.Complete, "a tool result arriving after Stop does not bring the turn back");
+        late.Apply(new HookNotice(HookEvent.ToolDone, "late", null, ToolKind.Command, Project: "L"), lt += TimeSpan.FromMilliseconds(50));
+        late.Apply(new HookNotice(HookEvent.Attention, "late", null, Project: "L"), lt);
+        Check(late.Focus?.Phase == PetPhase.Complete, "results and notifications without a turn do not start one");
+        late.Apply(new HookNotice(HookEvent.Prompt, "late", "p2", Project: "L"), lt += TimeSpan.FromSeconds(1));
+        Check(late.Focus is { Phase: PetPhase.Working }, "the next prompt starts normally");
+        late.Advance(lt + TimeSpan.FromSeconds(179));
+        Check(late.Focus?.Phase == PetPhase.Working, "working timeout unchanged: still working before 3 minutes");
+        late.Advance(lt += TimeSpan.FromSeconds(181));
+        Check(late.Focus is null && late.Sessions.First().Phase == PetPhase.Idle, "working timeout unchanged: idle after 3 minutes");
+
+        var crowd = new PetState();
+        var ct = TimeSpan.Zero;
+        foreach (var id in new[] { "work", "wait", "fail", "done", "quiet" })
+            crowd.Apply(new HookNotice(HookEvent.Prompt, id, "p", Project: id), ct);
+        crowd.Apply(new HookNotice(HookEvent.Permission, "wait", "p", Project: "wait"), ct);
+        crowd.Apply(new HookNotice(HookEvent.Failure, "fail", "p", Project: "fail"), ct);
+        crowd.Apply(new HookNotice(HookEvent.Stop, "done", "p", Project: "done"), ct);
+        crowd.Apply(new HookNotice(HookEvent.Stop, "quiet", "p", Project: "quiet"), ct);
+        crowd.Advance(ct + TimeSpan.FromSeconds(4.5));
+        crowd.Apply(new HookNotice(HookEvent.Tool, "work", "p", ToolKind.Read, Project: "work"), ct + TimeSpan.FromSeconds(4.5));
+        Check(crowd.IdleCount == 2, "two finished sessions count as idle: " + crowd.IdleCount);
+        Check(crowd.ClearIdle() == 2 && crowd.Sessions.Select(s => s.Id).OrderBy(s => s).SequenceEqual(new[] { "fail", "wait", "work" }),
+            "clearing idle sessions keeps working, waiting and failed ones");
+        crowd.Apply(new HookNotice(HookEvent.Prompt, "done", "q", Project: "done"), ct + TimeSpan.FromSeconds(5));
+        Check(crowd.Sessions.Any(s => s.Id == "done" && s.Phase == PetPhase.Working), "a cleared session comes back with its next event");
+
+        // v1.1: the mascot may sit over the taskbar and reach the monitor's real edges
+        var screen = new System.Drawing.Rectangle(0, 0, 1920, 1080);
+        var work = new System.Drawing.Rectangle(0, 0, 1920, 1032);
+        var placed = PetWindow.ConstrainPlacement(new System.Drawing.Point(1660, 1000), screen, 260, 143, 0);
+        Check(placed.Window.Y == 1080 - 143 && placed.Window.X == 1660, "placement allows the taskbar area: " + placed.Window);
+        placed = PetWindow.ConstrainPlacement(new System.Drawing.Point(5000, -40), screen, 260, 143, 0);
+        Check(placed.Window == new System.Drawing.Point(1920 - 260, 0), "placement stays on the monitor");
+        var second = new System.Drawing.Rectangle(-2560, -200, 2560, 1440);
+        placed = PetWindow.ConstrainPlacement(new System.Drawing.Point(-2700, 1300), second, 300, 150, 0);
+        Check(placed.Window == new System.Drawing.Point(-2560, 1240 - 150), "placement works on a monitor left of and above the primary");
+        var flush = PetWindow.SnapOffsets(1800, 1900, 1070, 920, screen, work, 24, 6);
+        Check(flush.Dx == 20 && flush.Dy == 10, $"snaps flush to the screen corner ({flush.Dx},{flush.Dy})");
+        var taskbar = PetWindow.SnapOffsets(1800, 1890, 1030, 880, screen, work, 24, 6);
+        Check(taskbar.Dy == -4, "snaps above the taskbar when that edge is nearer: " + taskbar.Dy);
+        var free = PetWindow.SnapOffsets(800, 900, 600, 450, screen, work, 24, 6);
+        Check(free == (0, 0, null), "no snap away from edges");
+        var leftEdge = PetWindow.SnapOffsets(-2550, -2450, 700, 500, second, second, 24, 6);
+        Check(leftEdge.Dx == -10, "snaps flush to the left edge of a second monitor");
+
+        // v1.1: colour removal is perceptual, previews before erasing, and respects protected areas
+        Check(Math.Abs(PetImage.ToLab(255, 255, 255).L - 100) < 0.5 && Math.Abs(PetImage.ToLab(0, 0, 0).L) < 0.5, "Lab conversion");
+        var soft = PetImage.FromBitmap(TwoTone(Color.FromRgb(235, 235, 235), Color.FromRgb(214, 214, 214)));
+        var softPreview = soft.EdgeRemoval(PetImage.DefaultTolerance);
+        Check(softPreview[0] && !softPreview[60 * 120 + 60] && soft.Mask.All(m => m == 255),
+            "default tolerance keeps a light grey subject on a white background, and preview changes nothing");
+        int softKept = soft.KeptCount();
+        soft.Erase(softPreview);
+        Check(soft.Mask[0] == 0 && soft.Mask[60 * 120 + 60] == 255 && soft.KeptCount() < softKept, "erase applies the preview");
+        var guarded = PetImage.FromBitmap(TwoTone(Color.FromRgb(200, 230, 255), Color.FromRgb(202, 231, 254)));
+        var unguarded = guarded.EdgeRemoval(PetImage.DefaultTolerance);
+        Check(unguarded[60 * 120 + 60], "a subject nearly the background colour would be removed");
+        guarded.ProtectDab(60, 60, 30, add: true);
+        var protectedPreview = guarded.EdgeRemoval(PetImage.DefaultTolerance);
+        Check(!protectedPreview[60 * 120 + 60] && protectedPreview[0], "protected area is kept by edge removal");
+        Check(guarded.WandRemoval(60, 60, 40, contiguous: false)[60 * 120 + 60] == false, "wand skips protected pixels");
+        guarded.IntersectMask(new byte[120 * 120]);
+        Check(guarded.Mask[60 * 120 + 60] == 255 && guarded.Mask[0] == 0, "the background model leaves protected pixels");
+        var protectSnap = guarded.Save();
+        guarded.ProtectDab(60, 60, 30, add: false);
+        Check(!guarded.HasProtection, "protection can be removed");
+        guarded.Restore(protectSnap);
+        Check(guarded.HasProtection, "undo restores protection");
+        guarded.RotateRight();
+        Check(guarded.Protect.Length == guarded.Width * guarded.Height && guarded.HasProtection, "rotation keeps protection");
+        var stripes = PetImage.FromBitmap(Stripes());
+        var pickedOnly = stripes.EdgeRemoval(PetImage.DefaultTolerance, [stripes.SampleColor(2, 2)]);
+        Check(pickedOnly[2 * 120 + 2] && !pickedOnly[2 * 120 + 100], "a picked colour removes only that colour");
+        Check(WorkshopWindow.TooMuch(95, 100) && !WorkshopWindow.TooMuch(80, 100) && !WorkshopWindow.TooMuch(5, 0), "too-much warning threshold");
+
+        // v1.1: rotations used by high quality mode turn back exactly
+        var grid = Enumerable.Range(0, 6).Select(v => (byte)v).ToArray();
+        bool roundTrips = Enumerable.Range(1, 3).All(turns =>
+        {
+            var turned = BackgroundRemover.Rotate(grid, 3, 2, 1, turns);
+            var back = BackgroundRemover.Rotate(turned.Data, turned.Width, turned.Height, 1, 4 - turns);
+            return back.Data.SequenceEqual(grid) && back.Width == 3;
+        });
+        var quarter = BackgroundRemover.Rotate(grid, 3, 2, 1, 1);
+        Check(roundTrips && quarter.Width == 2 && quarter.Data.SequenceEqual(new byte[] { 3, 0, 4, 1, 5, 2 }), "quarter turns round-trip");
 
         // Picture safety: limits apply before pixels are decoded
         Check(Throws(() => PetImage.CheckSize(20_000, 10)) && Throws(() => PetImage.CheckSize(8000, 8000))
@@ -458,6 +553,37 @@ internal static class Tests
         unsaved.Confirm = _ => true;
         Check(w.CloseWorkshop() && !unsaved.IsVisible, "discarded work lets the mascot close");
         typeof(PetWindow).GetField("workshop", flags)!.SetValue(w, null);
+
+        // Workshop preview: picking a colour previews only; Apply is one undoable step
+        var preview = new WorkshopWindow(null, _ => { }, prefs)
+        {
+            Left = -10000, Top = -10000, ShowActivated = false, ShowInTaskbar = false, Width = 1120, Height = 720
+        };
+        preview.Show();
+        var previewPicture = PetImage.FromBitmap(SamplePicture());
+        typeof(WorkshopWindow).GetMethod("Load", flags)!.Invoke(preview, [previewPicture, true]);
+        var undoList = (System.Collections.IList)typeof(WorkshopWindow).GetField("undo", flags)!.GetValue(preview)!;
+        preview.PickColor(3, 3);
+        Check(preview.Previewing && preview.PreviewCount > 100 && previewPicture.Mask.All(m => m == 255) && undoList.Count == 0,
+            "picking a background colour shows a preview without erasing");
+        preview.UpdateLayout();
+        System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+        var pcontent = (Panel)preview.Content;
+        pcontent.Background = preview.Background;
+        var pbmp = new RenderTargetBitmap((int)pcontent.ActualWidth, (int)pcontent.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+        pbmp.Render(pcontent);
+        var penc = new PngBitmapEncoder(); penc.Frames.Add(BitmapFrame.Create(pbmp));
+        using (var fs = File.Create(Path.Combine(outDir, "w2-workshop-preview.png"))) penc.Save(fs);
+        string? asked = null;
+        preview.Confirm = q => { asked = q; return true; };
+        preview.ApplyPreview();
+        Check(asked is null, "a normal background removal does not ask");
+        Check(!preview.Previewing && previewPicture.Mask[0] == 0 && previewPicture.Mask[90 * 200 + 100] == 255 && undoList.Count == 1,
+            "applying the preview erases the background as one undo step");
+        typeof(WorkshopWindow).GetMethod("Undo", flags)!.Invoke(preview, null);
+        Check(previewPicture.Mask.All(m => m == 255), "undo brings the background back");
+        preview.Confirm = _ => true;
+        preview.Close();
         Directory.Delete(petRoot, true);
 
         // Background model: only when a local copy is given (second argument) or already installed.
@@ -469,6 +595,13 @@ internal static class Tests
             int center = aiMask[90 * 200 + 100], corner = aiMask[5 * 200 + 5];
             Check(aiMask.Length == 200 * 180 && center > 200 && corner < 40,
                 $"background model keeps the subject (centre {center}) and drops the corner ({corner})");
+            var hqMask = BackgroundRemover.Predict(PetImage.FromBitmap(SamplePicture()), highQuality: true);
+            Check(hqMask.Length == aiMask.Length && hqMask[90 * 200 + 100] > 200 && hqMask[5 * 200 + 5] < 40,
+                "high quality mode keeps the subject and drops the corner");
+            bool cancelled;
+            try { BackgroundRemover.Predict(aiPicture, new System.Threading.CancellationToken(true), highQuality: true); cancelled = false; }
+            catch (OperationCanceledException) { cancelled = true; }
+            Check(cancelled, "high quality mode can be cancelled");
             aiPicture.IntersectMask(aiMask);
             var aiEnc = new PngBitmapEncoder(); aiEnc.Frames.Add(BitmapFrame.Create(aiPicture.Compose()));
             using var aiFile = File.Create(Path.Combine(outDir, "a1-ai-mask.png")); aiEnc.Save(aiFile);
@@ -492,6 +625,38 @@ internal static class Tests
         }
         var bmp = new RenderTargetBitmap(200, 180, 96, 96, PixelFormats.Pbgra32);
         bmp.Render(visual);
+        bmp.Freeze();
+        return bmp;
+    }
+
+    /// <summary>120×120: background colour with a 50 px wide square of the subject colour in the middle.</summary>
+    static BitmapSource TwoTone(Color background, Color subject)
+    {
+        var pixels = new byte[120 * 120 * 4];
+        for (int y = 0; y < 120; y++)
+        for (int x = 0; x < 120; x++)
+        {
+            var c = x is >= 35 and < 85 && y is >= 35 and < 85 ? subject : background;
+            int p = (y * 120 + x) * 4;
+            (pixels[p], pixels[p + 1], pixels[p + 2], pixels[p + 3]) = (c.B, c.G, c.R, 255);
+        }
+        var bmp = BitmapSource.Create(120, 120, 96, 96, PixelFormats.Bgra32, null, pixels, 120 * 4);
+        bmp.Freeze();
+        return bmp;
+    }
+
+    /// <summary>120×120: left half light blue, right half orange.</summary>
+    static BitmapSource Stripes()
+    {
+        var pixels = new byte[120 * 120 * 4];
+        for (int y = 0; y < 120; y++)
+        for (int x = 0; x < 120; x++)
+        {
+            int p = (y * 120 + x) * 4;
+            (pixels[p], pixels[p + 1], pixels[p + 2], pixels[p + 3]) = x < 60 ? ((byte)250, (byte)220, (byte)180, (byte)255)
+                : ((byte)40, (byte)140, (byte)240, (byte)255);
+        }
+        var bmp = BitmapSource.Create(120, 120, 96, 96, PixelFormats.Bgra32, null, pixels, 120 * 4);
         bmp.Freeze();
         return bmp;
     }

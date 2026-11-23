@@ -21,6 +21,7 @@
   <ItemGroup>
     <Compile Include="..\..\*.cs" Exclude="..\..\Program.cs" />
     <Compile Include="Tests.cs" />
+    <Compile Include="Bench.cs" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.20.1" />
     <Page Include="..\..\*.xaml" />
     <Resource Include="..\..\Assets\Petglare.ico" Link="Assets\Petglare.ico" />
