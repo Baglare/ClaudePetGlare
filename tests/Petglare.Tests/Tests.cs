@@ -24,6 +24,7 @@ internal static class Tests
     static int Main(string[] args)
     {
         if (args.Length == 4 && args[0] == "--bench") return Bench.Run(args[1], args[2], args[3]);
+        if (args.Length == 3 && args[0] == "--catalog-check") return CatalogCheck(args[1], args[2]);
         // Parsing
         var edit = Parse(new { hook_event_name = "PreToolUse", session_id = "s1", cwd = @"C:\Projeler\VoxForge", tool_name = "Edit", tool_input = new { file_path = @"C:\Projeler\VoxForge\App.cs" } });
         Check(edit is { Event: HookEvent.Tool, Tool: ToolKind.Edit, FileName: "App.cs", Project: "VoxForge" }, "edit parsed with project and file");
@@ -834,6 +835,21 @@ internal static class Tests
         {
             public override bool CanSeek => false;
         }
+    }
+
+    /// <summary>Reads a real catalog (e.g. a Petglare-Workshop branch) and adds its first pet to a temporary library.</summary>
+    static int CatalogCheck(string baseUrl, string libraryRoot)
+    {
+        WorkshopCatalog.BaseUrl = baseUrl.EndsWith('/') ? baseUrl : baseUrl + "/";
+        PetLibrary.Root = libraryRoot;
+        var app = new Application();
+        var pets = WorkshopCatalog.LoadAsync(default).GetAwaiter().GetResult();
+        Console.WriteLine($"catalog: {pets.Count} pet(s): {string.Join(", ", pets.Select(p => p.Id))}");
+        if (pets.Count == 0) return 1;
+        var pet = WorkshopCatalog.InstallAsync(pets[0], null, default).GetAwaiter().GetResult();
+        var saved = PetImage.Decode(pet.ImagePath);
+        Console.WriteLine($"installed: {pet.Name} origin={pet.Origin} {saved.PixelWidth}x{saved.PixelHeight} at {pet.Folder}");
+        return 0;
     }
 
     static bool Throws(Action action)
