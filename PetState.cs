@@ -218,12 +218,15 @@ internal sealed class PetState
             {
                 // With an id, only that tool; without one, only a running tool of the same kind
                 // (the oldest, as results arrive in start order). Never an unrelated tool.
+                // A tool already waiting (a question or plan) can still be the one asking: Claude sends a
+                // permission request for those too, without a tool use id, while their result has one.
                 RunningTool? tool = notice.ToolUse is { } id
                     ? session.Tools.GetValueOrDefault(id)
                     : notice.Tool == ToolKind.Other ? null
-                    : session.Tools.Values.Where(t => t.Waiting is null && t.Kind == notice.Tool)
-                        .OrderBy(t => t.Started).FirstOrDefault();
-                if (tool is not null) tool.Waiting = "Onay bekleniyor";
+                    : session.Tools.Values.Where(t => t.Kind == notice.Tool)
+                        .OrderBy(t => t.Waiting is null ? 0 : 1).ThenBy(t => t.Started).FirstOrDefault();
+                // A question or plan keeps saying what it waits for.
+                if (tool is not null) tool.Waiting ??= "Onay bekleniyor";
                 else session.Waits.Add(new PendingWait(notice.ToolUse, notice.Tool, "Onay bekleniyor", false));
                 return Refresh(session, now);
             }
@@ -267,9 +270,13 @@ internal sealed class PetState
     }
 
     /// <summary>The untracked wait a result ends: same tool use id, or without ids the oldest of the same kind.</summary>
-    private static PendingWait? FindWait(SessionStatus session, HookNotice notice) => notice.ToolUse is { } id
-        ? session.Waits.FirstOrDefault(w => w.ToolUse == id)
-        : session.Waits.FirstOrDefault(w => !w.FromNotification && w.ToolUse is null && w.Kind == notice.Tool);
+    /// <remarks>
+    /// Permission requests may come without a tool use id while results have one, so a result
+    /// with an unknown id also ends an id-less wait of its own kind.
+    /// </remarks>
+    private static PendingWait? FindWait(SessionStatus session, HookNotice notice) =>
+        (notice.ToolUse is { } id ? session.Waits.FirstOrDefault(w => w.ToolUse == id) : null)
+        ?? session.Waits.FirstOrDefault(w => !w.FromNotification && w.ToolUse is null && w.Kind == notice.Tool);
 
     private static void ResetTurn(SessionStatus session)
     {

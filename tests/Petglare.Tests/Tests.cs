@@ -208,6 +208,27 @@ internal static class Tests
         unk.Apply(U(HookEvent.Permission, ToolKind.Other, null), ut += TimeSpan.FromSeconds(1));
         Check(unkSession.Tools.Values.All(t => t.Waiting is null), "an unnamed permission is not pinned on the running read");
 
+        // An answered question or plan does not stay "waiting": its permission request has no id, its result does
+        foreach (var (kind, ask) in new[] { (ToolKind.Question, "Sana soru soruyor"), (ToolKind.Plan, "Plan onayı bekleniyor") })
+        {
+            var q = new PetState();
+            var qt = TimeSpan.Zero;
+            q.Apply(new HookNotice(HookEvent.Prompt, "q", "p1", Project: "Q"), qt);
+            q.Apply(new HookNotice(HookEvent.Tool, "q", "p1", kind, Project: "Q", ToolUse: "toolu_q"), qt += TimeSpan.FromSeconds(1));
+            q.Apply(new HookNotice(HookEvent.Permission, "q", "p1", kind, Project: "Q"), qt += TimeSpan.FromSeconds(1));
+            q.Apply(new HookNotice(HookEvent.Attention, "q", "p1", Project: "Q"), qt);
+            Check(q.Focus is { Phase: PetPhase.Attention } focus && focus.Message == ask && q.Sessions.First().Waits.Count == 0,
+                $"{kind}: the permission request joins the waiting tool and keeps its message");
+            q.Apply(new HookNotice(HookEvent.ToolDone, "q", "p1", kind, Project: "Q", ToolUse: "toolu_q"), qt += TimeSpan.FromSeconds(20));
+            Check(q.Focus is { Phase: PetPhase.Working, Message: "Claude düşünüyor" }, $"{kind}: answering ends the wait");
+        }
+        var stray = new PetState();
+        stray.Apply(new HookNotice(HookEvent.Prompt, "st", "p1"), TimeSpan.Zero);
+        stray.Apply(new HookNotice(HookEvent.Permission, "st", "p1", ToolKind.Command), TimeSpan.FromSeconds(1));
+        stray.Apply(new HookNotice(HookEvent.ToolDone, "st", "p1", ToolKind.Command, ToolUse: "toolu_x"), TimeSpan.FromSeconds(2));
+        Check(stray.Focus?.Phase == PetPhase.Working && stray.Sessions.First().Waits.Count == 0,
+            "an id-less permission ends when its kind's result arrives with an id");
+
         // v1.1: a finished turn stays finished; idle sessions can be cleared; timeouts unchanged
         var late = new PetState();
         var lt = TimeSpan.Zero;
