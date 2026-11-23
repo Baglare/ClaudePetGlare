@@ -7,11 +7,16 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- ONNX Runtime ships a native DLL; keep it inside the single-file EXE. -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <ApplicationIcon>Assets\Petglare.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
     <!-- The headless test project compiles these sources itself. -->
     <Compile Remove="tests\**" />
     <Page Remove="tests\**" />
     <None Remove="tests\**" />
+    <Resource Include="Assets\Petglare.ico" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.20.1" />
   </ItemGroup>
 </Project>

@@ -38,6 +38,7 @@ internal sealed class DiagnosticsWindow : Window
         this.snapshot = snapshot;
         this.waitForPing = waitForPing;
         Title = "Petglare · Bağlantı teşhisi";
+        Icon = TrayIcon.AppIcon;
         Width = 520;
         SizeToContent = SizeToContent.Height;
         ResizeMode = ResizeMode.NoResize;

@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Media;
@@ -35,28 +36,28 @@ internal sealed class TrayIcon : IDisposable
     internal void SetText(string text) =>
         icon.Text = text.Length <= 127 ? text : text[..126] + "…";
 
-    /// <summary>Draws the mascot with a small status dot. Re-renders only when something changed.</summary>
-    internal void Update(FrameworkElement mascot, Color? dot, string paletteKey)
+    /// <summary>The app icon (Assets\Petglare.ico), shared by the tray and the app's windows.</summary>
+    internal static readonly BitmapDecoder AppIconDecoder = BitmapDecoder.Create(
+        new Uri("pack://application:,,,/Assets/Petglare.ico"), BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+
+    internal static BitmapFrame AppIcon => AppIconDecoder.Frames[0];
+
+    /// <summary>Draws the app icon with a small status dot. Re-renders only when the dot changed.</summary>
+    internal void Update(Color? dot)
     {
-        var key = $"{paletteKey}|{dot}";
+        var key = dot?.ToString() ?? "-";
         if (key == renderedKey) return;
         renderedKey = key;
 
         const int size = 32;
-        mascot.UpdateLayout();
         var visual = new DrawingVisual();
         using (var context = visual.RenderOpen())
         {
-            if (mascot.ActualWidth > 0 && mascot.ActualHeight > 0)
-            {
-                // Render at twice the size first so the small icon stays smooth.
-                var source = new RenderTargetBitmap((int)Math.Ceiling(mascot.ActualWidth * 2),
-                    (int)Math.Ceiling(mascot.ActualHeight * 2), 192, 192, PixelFormats.Pbgra32);
-                source.Render(mascot);
-                double scale = size / Math.Max(mascot.ActualWidth, mascot.ActualHeight);
-                double width = mascot.ActualWidth * scale, height = mascot.ActualHeight * scale;
-                context.DrawImage(source, new Rect((size - width) / 2, (size - height) / 2, width, height));
-            }
+            // The .ico carries hand-tuned 16-256 px frames; use the exact 32 px one when present.
+            var frame = AppIconDecoder.Frames.FirstOrDefault(f => f.PixelWidth == size)
+                ?? AppIconDecoder.Frames.OrderByDescending(f => f.PixelWidth).First();
+            RenderOptions.SetBitmapScalingMode(visual, BitmapScalingMode.HighQuality);
+            context.DrawImage(frame, new Rect(0, 0, size, size));
             if (dot is { } color)
             {
                 context.DrawEllipse(new SolidColorBrush(Color.FromRgb(0x1C, 0x1C, 0x21)), null,

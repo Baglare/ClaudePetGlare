@@ -85,7 +85,19 @@ internal static class Tests
         Check(stack.ShowBadge && stack.Speaking.Length == 1, "finished chat leaves a badge, other keeps bubble");
         Check(stack.ClearFinished() && !stack.ShowBadge && stack.Speaking.Length == 1, "looking at Claude clears badge only");
         var sz = PetView.WindowSize(new Preferences { MaxBubbles = 3, BubbleSize = "Büyük" });
-        Check(sz.Width == 320 && sz.Height > 143, "window grows for three large bubbles: " + sz);
+        Check(sz.Width == 299 && sz.Height > 143, "window grows for three large bubbles: " + sz);
+        Check(new Preferences { BubbleSize = "Küçük" }.BubblePercent == 92 && new Preferences().BubblePercent == 100,
+            "old named bubble sizes become percentages");
+        var scaled = new Preferences { BubbleSize = "Büyük" };
+        scaled.SetBubbleScale(500);
+        Check(scaled.BubblePercent == Preferences.MaxBubbleScale && scaled.BubbleSize is null
+            && !JsonSerializer.Serialize(scaled).Contains("BubbleSize"), "bubble scale clamps and drops the old name");
+        Check(Appearance.Metrics(100).Font == 13 && Appearance.Metrics(130).Height == Math.Round(38 * 1.3),
+            "bubble metrics scale from the normal bubble");
+        Check(new Preferences { Size = 500 }.MascotSize == 200 && new Preferences { Size = 10 }.MascotSize == 60
+            && new Preferences { Opacity = 5 }.OpacityPercent == 30, "mascot size and opacity clamp to slider range");
+        Check(PetView.WindowSize(new Preferences { Size = 200, BubbleScale = 85 }).Width >= 89 * 2,
+            "window is wide enough for the largest mascot");
         Check(PetView.WindowSize(new Preferences { MaxBubbles = 1 }) == new Size(260, 143), "one normal bubble keeps the original size");
         var copy = new Preferences { X = 5, Hidden = true };
         copy.CopySettingsFrom(new Preferences { X = 99, Hidden = false, Palette = "Nane", Size = 120 });
@@ -168,6 +180,9 @@ internal static class Tests
             Left = -10000, Top = -10000, ShowActivated = false, ShowInTaskbar = false
         };
         settingsWindow.Show();
+        var iconSizes = TrayIcon.AppIconDecoder.Frames.Select(f => f.PixelWidth).ToHashSet();
+        Check(iconSizes.IsSupersetOf(new[] { 16, 32, 256 }), "app icon has 16/32/256 px frames");
+        Check(w.Icon != null && settingsWindow.Icon != null, "windows use the app icon");
         void SettingsShot(string name, double offset)
         {
             var scroller = FindChild<ScrollViewer>(settingsWindow)!;
@@ -186,8 +201,140 @@ internal static class Tests
         SettingsShot("s3-settings-end", 5000);
         settingsWindow.Close();
 
+        // Pet Workshop: picture tools, the pet library, and the custom pet on the desktop
+        var petRoot = Path.Combine(Path.GetTempPath(), "petglare-pets-" + Guid.NewGuid().ToString("N"));
+        PetLibrary.Root = petRoot;
+        var picture = PetImage.FromBitmap(SamplePicture());
+        Check(picture.Width == 200 && picture.Height == 180 && picture.Mask.All(m => m == 255), "picture opens fully kept");
+        int erased = picture.EdgeErase(12);
+        Check(erased > 200 * 180 / 2 && picture.Mask[0] == 0 && picture.Mask[90 * 200 + 100] == 255,
+            $"edge erase removes the plain background only ({erased} px)");
+        var b = picture.Bounds();
+        Check(Math.Abs(b.X - 50) <= 2 && Math.Abs(b.Width - 100) <= 3 && Math.Abs(b.Y - 40) <= 2, "bounds hug the subject: " + b);
+        var beforeBrush = picture.Save();
+        picture.Dab(100, 90, 6, 1, erase: true);
+        Check(picture.Mask[90 * 200 + 100] == 0, "eraser clears under the brush");
+        picture.Dab(100, 90, 6, 1, erase: false);
+        Check(picture.Mask[90 * 200 + 100] == 255, "restore brush paints it back");
+        picture.Restore(beforeBrush);
+        var wand = PetImage.FromBitmap(SamplePicture());
+        Check(wand.FloodErase(100, 90, 5, contiguous: true) > 0 && wand.Mask[0] == 255 && wand.Mask[90 * 200 + 100] == 0,
+            "magic wand erases the clicked colour region only");
+        var trimmed = PetImage.FromBitmap(SamplePicture());
+        trimmed.EdgeErase(12);
+        Check(trimmed.Trim() && trimmed.Width <= 106 && trimmed.Height <= 106, $"trim crops to the subject ({trimmed.Width}x{trimmed.Height})");
+        trimmed.RotateRight();
+        trimmed.FlipHorizontal();
+        trimmed.Feather(2);
+        trimmed.Shrink();
+        Check(trimmed.Mask.Any(m => m is > 0 and < 255), "feather leaves a soft edge");
+
+        var savedPet = PetLibrary.Save(null, "  Test\npet  ", picture);
+        Check(savedPet.Name == "Testpet" && savedPet.Editable && PetLibrary.List().Count == 1, "pet saved with source and mask");
+        var petPng = PetImage.Decode(savedPet.ImagePath);
+        Check(Math.Max(petPng.PixelWidth, petPng.PixelHeight) <= PetImage.PetSide && petPng.PixelWidth < 200,
+            $"saved pet is trimmed ({petPng.PixelWidth}x{petPng.PixelHeight})");
+        var reopened = PetLibrary.LoadForEditing(savedPet)!;
+        Check(reopened.Width == picture.Width && reopened.Mask.SequenceEqual(picture.Mask), "editing reopens the exact mask");
+        var exportPath = Path.Combine(petRoot, "export" + PetLibrary.Extension);
+        PetLibrary.Export(savedPet.Id, exportPath);
+        var imported = PetLibrary.Import(exportPath);
+        Check(imported.Name == "Testpet" && imported.Id != savedPet.Id && PetLibrary.List().Count == 2, "export then import adds a copy");
+        var junk = Path.Combine(petRoot, "junk" + PetLibrary.Extension);
+        File.WriteAllText(junk, "not a zip");
+        Check(Throws(() => PetLibrary.Import(junk)), "a broken pet file is refused");
+        Check(PetLibrary.Find("../evil") is null && PetLibrary.IdOf("custom:x") == "x", "pet ids cannot leave the library");
+        PetLibrary.Rename(imported.Id, "İkinci");
+        Check(PetLibrary.Find(imported.Id)!.Name == "İkinci", "rename");
+        PetLibrary.Delete(imported.Id);
+        Check(PetLibrary.List().Count == 1, "delete");
+
+        prefs.MaxBubbles = 2; prefs.SetBubbleScale(100); prefs.Mascot = savedPet.Key; prefs.Size = 100;
+        apply.Invoke(w, null);
+        Check(w.Pet.Custom.Visibility == Visibility.Visible && w.Pet.Vector.Visibility == Visibility.Collapsed,
+            "custom pet replaces the vector mascot");
+        Shot("r8-custom-pet");
+        prefs.Mascot = "custom:missing";
+        apply.Invoke(w, null);
+        Check(w.Pet.Vector.Visibility == Visibility.Visible, "a missing pet falls back to the cat");
+        prefs.Mascot = savedPet.Key; prefs.Size = 160; prefs.SetBubbleScale(125);
+        apply.Invoke(w, null);
+        Shot("r9-custom-large");
+
+        var customSettings = new SettingsWindow(prefs.Clone(), _ => { }, _ => { }, () => { })
+        {
+            Left = -10000, Top = -10000, ShowActivated = false, ShowInTaskbar = false
+        };
+        settingsWindow = customSettings;
+        customSettings.Show();
+        SettingsShot("s4-settings-custom", 0);
+        customSettings.Close();
+
+        var workshop = new WorkshopWindow(savedPet, _ => { }, prefs)
+        {
+            Left = -10000, Top = -10000, ShowActivated = false, ShowInTaskbar = false, Width = 1120, Height = 720
+        };
+        workshop.Show();
+        workshop.UpdateLayout();
+        System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+        var workshopContent = (Panel)workshop.Content;
+        workshopContent.Background = workshop.Background;
+        var wbmp = new RenderTargetBitmap((int)workshopContent.ActualWidth, (int)workshopContent.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+        wbmp.Render(workshopContent);
+        var wenc = new PngBitmapEncoder(); wenc.Frames.Add(BitmapFrame.Create(wbmp));
+        using (var fs = File.Create(Path.Combine(outDir, "w1-workshop.png"))) wenc.Save(fs);
+        Check(workshop.Empty.Visibility == Visibility.Collapsed && workshop.SaveButton.IsEnabled == false,
+            "workshop opens an existing pet ready to edit");
+        workshop.Close();
+        var emptyWorkshop = new WorkshopWindow(null, _ => { }, prefs)
+        {
+            Left = -10000, Top = -10000, ShowActivated = false, ShowInTaskbar = false
+        };
+        emptyWorkshop.Show();
+        Check(emptyWorkshop.Empty.Visibility == Visibility.Visible && !emptyWorkshop.SaveButton.IsEnabled, "new workshop waits for a picture");
+        emptyWorkshop.Close();
+        Directory.Delete(petRoot, true);
+
+        // Background model: only when a local copy is given (second argument) or already installed.
+        if (args.Length > 1) BackgroundRemover.ModelPath = args[1];
+        if (BackgroundRemover.ModelPresent)
+        {
+            var aiPicture = PetImage.FromBitmap(SamplePicture());
+            var aiMask = BackgroundRemover.Predict(aiPicture);
+            int center = aiMask[90 * 200 + 100], corner = aiMask[5 * 200 + 5];
+            Check(aiMask.Length == 200 * 180 && center > 200 && corner < 40,
+                $"background model keeps the subject (centre {center}) and drops the corner ({corner})");
+            aiPicture.IntersectMask(aiMask);
+            var aiEnc = new PngBitmapEncoder(); aiEnc.Frames.Add(BitmapFrame.Create(aiPicture.Compose()));
+            using var aiFile = File.Create(Path.Combine(outDir, "a1-ai-mask.png")); aiEnc.Save(aiFile);
+        }
+        else Console.WriteLine("SKIP background model not present");
+
         Console.WriteLine(failures == 0 ? "ALL PASS" : $"{failures} FAILED");
         return failures;
+    }
+
+    /// <summary>A purple blob with eyes on a plain light-blue background, 200×180.</summary>
+    static BitmapSource SamplePicture()
+    {
+        var visual = new DrawingVisual();
+        using (var dc = visual.RenderOpen())
+        {
+            dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(200, 230, 255)), null, new Rect(0, 0, 200, 180));
+            dc.DrawEllipse(new SolidColorBrush(Color.FromRgb(150, 110, 220)), null, new Point(100, 90), 50, 50);
+            dc.DrawEllipse(Brushes.Black, null, new Point(82, 82), 6, 9);
+            dc.DrawEllipse(Brushes.Black, null, new Point(118, 82), 6, 9);
+        }
+        var bmp = new RenderTargetBitmap(200, 180, 96, 96, PixelFormats.Pbgra32);
+        bmp.Render(visual);
+        bmp.Freeze();
+        return bmp;
+    }
+
+    static bool Throws(Action action)
+    {
+        try { action(); return false; }
+        catch (Exception) { return true; }
     }
 
     static T? FindChild<T>(DependencyObject parent) where T : DependencyObject

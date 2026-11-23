@@ -1,0 +1,134 @@
+<Window x:Class="Petglare.WorkshopWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:Petglare"
+        Title="Pet Workshop" Icon="pack://application:,,,/Assets/Petglare.ico"
+        Width="1120" Height="720" MinWidth="960" MinHeight="600"
+        WindowStartupLocation="CenterScreen" UseLayoutRounding="True" AllowDrop="True"
+        Background="{DynamicResource Canvas}" Foreground="{DynamicResource Ink}"
+        FontFamily="Segoe UI Variable Text, Segoe UI" FontSize="13"
+        TextOptions.TextFormattingMode="Display">
+  <Window.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="Theme.xaml"/>
+      </ResourceDictionary.MergedDictionaries>
+      <!-- Grey and white squares behind transparent pixels -->
+      <DrawingBrush x:Key="Checker" TileMode="Tile" Viewport="0,0,16,16" ViewportUnits="Absolute">
+        <DrawingBrush.Drawing>
+          <DrawingGroup>
+            <GeometryDrawing Brush="#F4F3F8" Geometry="M0,0 H2 V2 H0Z"/>
+            <GeometryDrawing Brush="#D9D7E4" Geometry="M0,0 H1 V1 H0Z M1,1 H2 V2 H1Z"/>
+          </DrawingGroup>
+        </DrawingBrush.Drawing>
+      </DrawingBrush>
+      <Style x:Key="ToolHeading" TargetType="TextBlock">
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="Foreground" Value="{StaticResource Soft}"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Margin" Value="0,18,0,8"/>
+      </Style>
+      <Style x:Key="Small" TargetType="Button" BasedOn="{StaticResource Secondary}">
+        <Setter Property="Padding" Value="10,6"/>
+        <Setter Property="Margin" Value="0,0,6,6"/>
+        <Setter Property="FontWeight" Value="Normal"/>
+        <Setter Property="HorizontalContentAlignment" Value="Left"/>
+      </Style>
+    </ResourceDictionary>
+  </Window.Resources>
+
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="268"/>
+      <ColumnDefinition Width="*"/>
+      <ColumnDefinition Width="300"/>
+    </Grid.ColumnDefinitions>
+
+    <!-- Tools -->
+    <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" Margin="0,16,0,12" Focusable="False">
+      <StackPanel x:Name="Tools" Margin="20,0,14,8"/>
+    </ScrollViewer>
+
+    <!-- The picture being edited -->
+    <Border Grid.Column="1" Margin="4,20,8,16" CornerRadius="16" Background="{StaticResource Surface}" Padding="12">
+      <DockPanel>
+        <DockPanel DockPanel.Dock="Bottom" Margin="2,10,2,0">
+          <Border DockPanel.Dock="Right" Padding="3" CornerRadius="10" Background="{StaticResource Canvas}">
+            <StackPanel x:Name="Backdrops" Orientation="Horizontal"/>
+          </Border>
+          <TextBlock x:Name="Hint" Foreground="{StaticResource Muted}" FontSize="12" VerticalAlignment="Center"
+                     TextTrimming="CharacterEllipsis"/>
+        </DockPanel>
+        <Border x:Name="Viewport" CornerRadius="10" ClipToBounds="True" Background="{StaticResource Checker}"
+                Cursor="None" Focusable="True" FocusVisualStyle="{x:Null}">
+          <Grid>
+            <Canvas x:Name="Stage">
+              <Image x:Name="Picture" RenderOptions.BitmapScalingMode="NearestNeighbor">
+                <Image.RenderTransform>
+                  <MatrixTransform x:Name="View"/>
+                </Image.RenderTransform>
+              </Image>
+              <Rectangle x:Name="CropBox" Visibility="Collapsed" Stroke="#C9BDFF" StrokeThickness="1.5"
+                         StrokeDashArray="4 3" Fill="#22C9BDFF" IsHitTestVisible="False"/>
+              <Ellipse x:Name="BrushRing" Visibility="Collapsed" Stroke="White" StrokeThickness="1.5"
+                       IsHitTestVisible="False">
+                <Ellipse.Effect>
+                  <DropShadowEffect ShadowDepth="0" BlurRadius="3" Color="Black" Opacity="0.9"/>
+                </Ellipse.Effect>
+              </Ellipse>
+            </Canvas>
+            <!-- Shown until a picture is opened -->
+            <Border x:Name="Empty" Background="{StaticResource Canvas}" Cursor="Arrow">
+              <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="340">
+                <TextBlock Text="Bir görselle başla" FontFamily="Segoe UI Variable Display, Segoe UI" FontSize="22"
+                           FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                <TextBlock Foreground="{StaticResource Soft}" TextWrapping="Wrap" TextAlignment="Center" Margin="0,8,0,18"
+                           Text="Görseli buraya sürükle, Ctrl+V ile yapıştır ya da bir dosya seç. PNG, JPG, BMP, GIF ve WebP olur."/>
+                <Button Style="{StaticResource Primary}" Content="Görsel seç…" HorizontalAlignment="Center" Click="OpenClick"/>
+              </StackPanel>
+            </Border>
+          </Grid>
+        </Border>
+      </DockPanel>
+    </Border>
+
+    <!-- Live result -->
+    <Border Grid.Column="2" Margin="0,20,20,16" CornerRadius="16" Background="{StaticResource Surface}" Padding="18,16">
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Top">
+          <TextBlock Text="Masaüstünde" FontFamily="Segoe UI Variable Display, Segoe UI" FontSize="18" FontWeight="SemiBold"/>
+          <TextBlock Text="Kaydedince maskot böyle görünür." Foreground="{StaticResource Soft}" Margin="0,4,0,0"/>
+        </StackPanel>
+        <StackPanel DockPanel.Dock="Bottom" Margin="0,14,0,0">
+          <TextBlock Text="Ad" FontWeight="SemiBold"/>
+          <TextBox x:Name="PetName" Margin="0,6,0,0" Padding="8,6" MaxLength="40"
+                   Background="{StaticResource Canvas}" Foreground="{StaticResource Ink}" CaretBrush="{StaticResource Ink}"
+                   BorderBrush="{StaticResource Line}" BorderThickness="1"/>
+        </StackPanel>
+        <Border x:Name="ResultStage" CornerRadius="12" Background="{StaticResource Canvas}" Margin="0,14,0,0"
+                ClipToBounds="True">
+          <!-- Shrinks a large preview to fit; never enlarges it -->
+          <Viewbox StretchDirection="DownOnly" Stretch="Uniform" VerticalAlignment="Bottom" Margin="8,8,8,10">
+            <local:PetView x:Name="Result"/>
+          </Viewbox>
+        </Border>
+      </DockPanel>
+    </Border>
+
+    <Border Grid.Row="1" Grid.ColumnSpan="3" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0"
+            Background="{StaticResource Surface}" Padding="20,12">
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+          <Button Style="{StaticResource Secondary}" Content="İptal" Click="CancelClick" IsCancel="True" Margin="0,0,10,0"/>
+          <Button x:Name="SaveButton" Style="{StaticResource Primary}" Content="Kaydet" Click="SaveClick" MinWidth="104"
+                  IsEnabled="False"/>
+        </StackPanel>
+        <TextBlock x:Name="Status" VerticalAlignment="Center" Foreground="{StaticResource Soft}"/>
+      </DockPanel>
+    </Border>
+  </Grid>
+</Window>

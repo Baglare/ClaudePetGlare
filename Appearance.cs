@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using System.Windows.Media;
 
@@ -46,18 +47,21 @@ internal static class Appearance
     internal sealed record BubbleMetrics(string Name, double Font, double Height, double Radius,
         double TextWidth, double WindowWidth, double Tick);
 
-    internal static readonly BubbleMetrics[] BubbleSizes =
-    [
-        new("Küçük", 12, 32, 13, 168, 230, 18),
-        new("Normal", 13, 38, 15, 218, 260, 22),
-        new("Büyük", 15, 44, 18, 270, 320, 26)
-    ];
+    private static readonly BubbleMetrics NormalBubble = new("Normal", 13, 38, 15, 218, 260, 22);
 
+    /// <summary>Quick picks under the sliders; the sliders themselves take any value in range.</summary>
+    internal static readonly (string Name, int Percent)[] BubblePresets = [("Küçük", 92), ("Normal", 100), ("Büyük", 115)];
     internal static readonly int[] Opacities = [100, 85, 70, 55];
     internal static readonly int[] MascotSizes = [80, 100, 120, 150];
 
-    internal static BubbleMetrics Metrics(string? name) =>
-        BubbleSizes.FirstOrDefault(m => m.Name == name) ?? BubbleSizes[1];
+    /// <summary>The normal bubble scaled to <paramref name="percent"/>.</summary>
+    internal static BubbleMetrics Metrics(int percent)
+    {
+        double k = percent / 100.0;
+        var n = NormalBubble;
+        return new BubbleMetrics($"%{percent}", Math.Round(n.Font * k, 1), Math.Round(n.Height * k),
+            Math.Round(n.Radius * k), Math.Round(n.TextWidth * k), Math.Ceiling(n.WindowWidth * k), Math.Round(n.Tick * k, 1));
+    }
 
     internal static MascotShape Shape(string? name) => Shapes.FirstOrDefault(s => s.Name == name) ?? Shapes[0];
     internal static Palette Colors(string? name) => Palettes.FirstOrDefault(p => p.Name == name) ?? Palettes[0];

@@ -22,8 +22,13 @@ Petglare, Claude Code hook olaylarını yerel named pipe üzerinden alan ve duru
 | `DiagnosticsWindow.cs` | Hook kurulumu, dinleme, son olay, uçtan uca ping testi ve onarım |
 | `Preferences.cs` | `%LOCALAPPDATA%\Petglare\position.json` (eski dosyalarla uyumlu) |
 | `Appearance.cs`, `TrayIcon.cs`, `AutoStart.cs` | Tema verisi, bildirim alanı simgesi/balon bildirimi, `HKCU\...\Run` |
+| `Theme.xaml` | Ayarlar ve Workshop'un ortak paleti ve kontrol stilleri (`Segment`, `Tile`, `Fine` sürgü, düğmeler) |
+| `PetImage.cs` | Workshop çekirdeği, UI'sız: renkler + ayrı alfa maskesi; fırça, değnek, kenardan silme, daralt/yumuşat, kırp/döndür, `ComposePet` (en çok 512 px) |
+| `PetLibrary.cs` | `%LOCALAPPDATA%\Petglare\Pets\<id>\` (pet.png, pet.json, source.png, mask.png); `custom:<id>` seçimi, `.petglare` (zip) içe/dışa aktarma ve doğrulama |
+| `WorkshopWindow.xaml(.cs)`, `WorkshopWindow.Ai.cs` | Pet Workshop düzenleyicisi; yapay zekâ düğmesi ve model indirme onayı |
+| `BackgroundRemover.cs` | U²-Net (u2netp.onnx) ile yerel arka plan maskesi; model izinle indirilir, sabit SHA-256 ile doğrulanır (ONNX Runtime) |
 
-Maskot çizimleri `PetView.xaml` içindeki vektör yollarıdır; görsel dosya yoktur.
+Maskot çizimleri `PetView.xaml` içindeki vektör yollarıdır. Marka görselleri `Assets/` altındadır: `Petglare.ico` (16–256 px) EXE simgesi (`ApplicationIcon`), pencere simgesi ve tepsi simgesinin tabanıdır (tepsi üstüne durum noktası çizer); PNG'ler (sade ikon, şeffaf ikon, yatay logo, kare rozet, README banner) yalnız belge/tanıtım içindir ve EXE'ye gömülmez.
 
 ## Derleme, test, yayın
 
@@ -34,6 +39,7 @@ dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile
 Compress-Archive -Path .\Teslim\Petglare.exe, .\Kur.cmd, .\Hooklari-Kaldir.cmd, .\README.md -DestinationPath .\Teslim\Petglare-Windows-x64.zip -Force
 ```
 
+- Arka plan modeli testi yalnız model varsa çalışır: ikinci argüman yerel `u2netp.onnx` yolu olabilir (`dotnet run --project tests\Petglare.Tests -- <PNG klasörü> <model yolu>`); yoksa `SKIP` yazar.
 - Test projesi uygulama kaynaklarını doğrudan derler (internal tipler için) ve `ALL PASS` ile biter; çıkış kodu başarısız kontrol sayısıdır. PNG'ler masaüstüne çizilmeden üretilir: maskot halleri, temalar, üç büyük balon ve ayarlar penceresi.
 - Hook kurulum testi geçici bir ayar dosyası kullanır; kullanıcının gerçek Claude ayarına dokunmaz.
 - `Teslim/` Git dışıdır. Claude hook'ları ve otomatik başlatma `Teslim\Petglare.exe` yolunu gösterir; yayın öncesi çalışan Petglare'ı kapat, yayından sonra yeniden aç.

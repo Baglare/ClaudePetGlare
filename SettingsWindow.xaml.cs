@@ -43,6 +43,8 @@ public partial class SettingsWindow : Window
         Preview.Interactive = false;
         statusTimer.Tick += (_, _) => { statusTimer.Stop(); Status.Text = ""; };
         SourceInitialized += (_, _) => UseDarkTitleBar();
+        PetLibrary.Changed += LibraryChanged;
+        Closed += (_, _) => PetLibrary.Changed -= LibraryChanged;
         Build();
     }
 
@@ -62,19 +64,26 @@ public partial class SettingsWindow : Window
         }
 
         Section("Maskot", first: true);
-        Row("Şekil", null, Tiles(Appearance.Shapes.Select(s => (s.Name, (UIElement)ShapeThumbnail(s.Name))),
-            draft.Mascot, v => draft.Mascot = v));
+        Row("Şekil", "Kendi görselinden pet yapmak için + karosuna bas. Kendi pet’ine sağ tıklayınca düzenleyebilir, "
+            + "dışa aktarabilir veya silebilirsin.", MascotTiles());
         Row("Renk", null, Swatches());
-        Row("Boyut", "Maskotun üzerindeki − / + düğmeleriyle de değiştirebilirsin.",
-            Segments(Appearance.MascotSizes.Select(s => ($"%{s}", s)), draft.MascotSize, v => draft.Size = v));
-        Row("Saydamlık", null, Segments(Appearance.Opacities.Select(o => (o == 100 ? "Opak" : $"%{o}", o)),
-            draft.Opacity, v => draft.Opacity = v));
+        customColorHint = Hint("Kendi pet’lerinde renkler görselden gelir.");
+        Sections.Children.Add(customColorHint);
+        UpdateSwatches();
+        Row("Maskot boyutu", "Maskotun üzerindeki − / + düğmeleriyle de değiştirebilirsin.",
+            Fine(Preferences.MinMascotSize, Preferences.MaxMascotSize, draft.MascotSize,
+                Appearance.MascotSizes.Select(s => ($"%{s}", s)), v => $"%{v}", v => draft.Size = v));
+        Row("Saydamlık", null,
+            Fine(Preferences.MinOpacity, 100, draft.OpacityPercent,
+                Appearance.Opacities.Select(o => (o == 100 ? "Opak" : $"%{o}", o)),
+                v => v == 100 ? "Opak" : $"%{v}", v => draft.Opacity = v));
 
         Section("Balonlar");
         Row("Stil", null, Tiles(Appearance.Bubbles.Select(b => (b.Name, (UIElement)BubbleThumbnail(b))),
             draft.Bubble, v => draft.Bubble = v));
-        Row("Boyut", null, Segments(Appearance.BubbleSizes.Select(m => (m.Name, m.Name)),
-            draft.BubbleSize, v => draft.BubbleSize = v));
+        Row("Balon boyutu", "Yazı ve balon birlikte büyür.",
+            Fine(Preferences.MinBubbleScale, Preferences.MaxBubbleScale, draft.BubblePercent,
+                Appearance.BubblePresets.Select(p => (p.Name, p.Percent)), v => $"%{v}", draft.SetBubbleScale));
         Row("Aynı anda gösterilen sohbet",
             "Birden fazla sohbet çalışırken balonlar alt alta dizilir; en önemlisi maskota en yakın durur.",
             Segments(new[] { 1, 2, 3 }.Select(n => (n.ToString(), n)), draft.BubbleCount, v => draft.MaxBubbles = v));
@@ -191,6 +200,52 @@ public partial class SettingsWindow : Window
         };
     }
 
+    /// <summary>
+    /// A slider for any value in range, its value on the right, and quick picks below.
+    /// A quick pick lights up whenever the slider sits exactly on it.
+    /// </summary>
+    private UIElement Fine(int min, int max, int value, IEnumerable<(string Name, int Value)> presets,
+        Func<int, string> format, Action<int> set)
+    {
+        var slider = new Slider { Style = StyleOf("Fine"), Minimum = min, Maximum = max, Value = value, Width = 300,
+            VerticalAlignment = VerticalAlignment.Center };
+        var label = new TextBlock { Text = format(value), FontWeight = FontWeights.SemiBold, MinWidth = 48,
+            Margin = new Thickness(14, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+        var picks = new List<(RadioButton Button, int Value)>();
+        string name = NewGroup();
+        var chips = new StackPanel { Orientation = Orientation.Horizontal };
+        foreach (var (text, pick) in presets)
+        {
+            var captured = pick;
+            var chip = Segment(text, name, pick == value, () => slider.Value = captured);
+            chip.Padding = new Thickness(10, 4, 10, 4);
+            chip.FontSize = 12;
+            picks.Add((chip, pick));
+            chips.Children.Add(chip);
+        }
+        slider.ValueChanged += (_, e) =>
+        {
+            int v = (int)Math.Round(e.NewValue);
+            label.Text = format(v);
+            foreach (var (button, pick) in picks) button.IsChecked = pick == v;
+            System.Windows.Automation.AutomationProperties.SetItemStatus(slider, format(v));
+            set(v);
+            Changed();
+        };
+        var top = new StackPanel { Orientation = Orientation.Horizontal };
+        top.Children.Add(slider);
+        top.Children.Add(label);
+        var panel = new StackPanel { HorizontalAlignment = HorizontalAlignment.Left };
+        panel.Children.Add(top);
+        panel.Children.Add(new Border
+        {
+            Background = (Brush)FindResource("Surface"), CornerRadius = new CornerRadius(9),
+            Padding = new Thickness(3), HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 6, 0, 0), Child = chips
+        });
+        return panel;
+    }
+
     private RadioButton Segment(string label, string group, bool selected, Action chosen)
     {
         var option = new RadioButton { Content = label, GroupName = group, IsChecked = selected, Style = StyleOf("Segment") };
@@ -216,10 +271,164 @@ public partial class SettingsWindow : Window
         return panel;
     }
 
+    // ───────────────────────────── Mascot choice ─────────────────────────────
+
+    private UIElement? swatches;
+    private TextBlock? customColorHint;
+
+    /// <summary>Built-in shapes, the user's own pets, and a tile that opens Pet Workshop.</summary>
+    private UIElement MascotTiles()
+    {
+        string name = NewGroup();
+        var panel = new WrapPanel();
+        void Add(string value, string label, UIElement picture, PetInfo? pet)
+        {
+            var option = new RadioButton
+            {
+                Content = picture, Tag = label, GroupName = name, IsChecked = value == draft.Mascot,
+                Style = StyleOf("Tile"), Margin = new Thickness(0, 0, 10, 6), ToolTip = label
+            };
+            System.Windows.Automation.AutomationProperties.SetName(option, label);
+            option.Checked += (_, _) => { draft.Mascot = value; UpdateSwatches(); Changed(); };
+            if (pet is not null) option.ContextMenu = PetMenu(pet);
+            panel.Children.Add(option);
+        }
+        foreach (var shape in Appearance.Shapes) Add(shape.Name, shape.Name, ShapeThumbnail(shape.Name), null);
+        foreach (var pet in PetLibrary.List()) Add(pet.Key, pet.Name, ShapeThumbnail(pet.Key), pet);
+
+        var add = new RadioButton
+        {
+            Content = new TextBlock { Text = "+", FontSize = 30, FontWeight = FontWeights.Light, Foreground = (Brush)FindResource("Accent") },
+            Tag = "Yeni pet", GroupName = NewGroup(), Style = StyleOf("Tile"), Margin = new Thickness(0, 0, 10, 6),
+            ToolTip = "Pet Workshop: kendi görselinden pet yap"
+        };
+        System.Windows.Automation.AutomationProperties.SetName(add, "Yeni pet");
+        add.Checked += (_, _) => { add.IsChecked = false; OpenWorkshop(null); };
+        panel.Children.Add(add);
+
+        var import = new Button { Content = "Pet dosyası içe aktar…", Style = StyleOf("Quiet"),
+            HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(-10, 0, 0, 0) };
+        import.Click += (_, _) => ImportPet();
+        var stack = new StackPanel();
+        stack.Children.Add(panel);
+        stack.Children.Add(import);
+        return stack;
+    }
+
+    private ContextMenu PetMenu(PetInfo pet)
+    {
+        var menu = new ContextMenu();
+        void Item(string header, Action action)
+        {
+            var item = new MenuItem { Header = header };
+            item.Click += (_, _) => action();
+            menu.Items.Add(item);
+        }
+        Item("Düzenle…", () => OpenWorkshop(pet));
+        Item("Dışa aktar…", () => ExportPet(pet));
+        menu.Items.Add(new Separator());
+        Item("Sil", () => DeletePet(pet));
+        return menu;
+    }
+
+    private void OpenWorkshop(PetInfo? pet)
+    {
+        var workshop = new WorkshopWindow(pet, made =>
+        {
+            draft.Mascot = made.Key;
+            RebuildKeepingScroll();
+            ShowStatus(pet is null ? $"“{made.Name}” eklendi; Uygula ile masaüstüne geçer" : $"“{made.Name}” güncellendi");
+        }, draft) { Owner = this };
+        workshop.ShowDialog();
+    }
+
+    private void ImportPet()
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Pet dosyası seç",
+            Filter = $"Petglare pet|*{PetLibrary.Extension}"
+        };
+        if (dialog.ShowDialog(this) != true) return;
+        try
+        {
+            var pet = PetLibrary.Import(dialog.FileName);
+            draft.Mascot = pet.Key;
+            RebuildKeepingScroll();
+            ShowStatus($"“{pet.Name}” içe aktarıldı");
+        }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException
+                                       or System.IO.InvalidDataException or InvalidOperationException)
+        {
+            ShowStatus("İçe aktarılamadı: " + ex.Message);
+        }
+    }
+
+    private void ExportPet(PetInfo pet)
+    {
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "Pet’i dışa aktar",
+            FileName = string.Concat(pet.Name.Split(System.IO.Path.GetInvalidFileNameChars())) + PetLibrary.Extension,
+            Filter = $"Petglare pet|*{PetLibrary.Extension}"
+        };
+        if (dialog.ShowDialog(this) != true) return;
+        try
+        {
+            PetLibrary.Export(pet.Id, dialog.FileName);
+            ShowStatus("Dışa aktarıldı");
+        }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+        {
+            ShowStatus("Dışa aktarılamadı: " + ex.Message);
+        }
+    }
+
+    private void DeletePet(PetInfo pet)
+    {
+        if (MessageBox.Show(this, $"“{pet.Name}” silinsin mi? Bu geri alınamaz.", "Petglare",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+        try
+        {
+            if (draft.Mascot == pet.Key) draft.Mascot = Appearance.Shapes[0].Name;
+            PetLibrary.Delete(pet.Id);
+            ShowStatus($"“{pet.Name}” silindi");
+        }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+        {
+            ShowStatus("Silinemedi: " + ex.Message);
+        }
+    }
+
+    private void LibraryChanged() => Dispatcher.BeginInvoke(RebuildKeepingScroll);
+
+    private void RebuildKeepingScroll()
+    {
+        var scroller = Sections.Parent as ScrollViewer;
+        double offset = scroller?.VerticalOffset ?? 0;
+        thumbnails.Clear();
+        Build();
+        UpdateApplyButton();
+        scroller?.ScrollToVerticalOffset(offset);
+    }
+
+    /// <summary>Colours belong to the built-in shapes; a user's pet brings its own.</summary>
+    private void UpdateSwatches()
+    {
+        bool custom = PetLibrary.IsCustom(draft.Mascot);
+        if (swatches is not null)
+        {
+            swatches.IsEnabled = !custom;
+            swatches.Opacity = custom ? 0.35 : 1;
+        }
+        if (customColorHint is not null) customColorHint.Visibility = custom ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     private UIElement Swatches()
     {
         string name = NewGroup();
         var panel = new StackPanel { Orientation = Orientation.Horizontal };
+        swatches = panel;
         var label = new TextBlock { Foreground = (Brush)FindResource("Soft"), VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(6, 0, 0, 0), Text = Appearance.Colors(draft.Palette).Name };
         foreach (var palette in Appearance.Palettes)

@@ -110,6 +110,7 @@ public partial class PetWindow : Window
             UpdateVisibility();
             RenderStatus();
             CheckHooksAtStartup();
+            PetLibrary.Changed += LibraryChanged;
         };
         Closed += async (_, _) =>
         {
@@ -119,6 +120,8 @@ public partial class PetWindow : Window
             showWait?.Unregister(null);
             diagnostics?.Close();
             settings?.Close();
+            workshop?.Close();
+            PetLibrary.Changed -= LibraryChanged;
             tray.Dispose();
             closing.Cancel();
             if (listener is not null) await listener;
@@ -281,14 +284,14 @@ public partial class PetWindow : Window
         var summary = SessionSummary();
         Pet.MascotCanvas.ToolTip = summary;
         tray.SetText(summary);
-        tray.Update(Pet.MascotCanvas, speaking.FirstOrDefault()?.Phase switch
+        tray.Update(speaking.FirstOrDefault()?.Phase switch
         {
             PetPhase.Attention => Color.FromRgb(0xFF, 0xC4, 0x3D),
             PetPhase.Error => Color.FromRgb(0xFF, 0x6B, 0x7A),
             PetPhase.Working => Color.FromRgb(0x7C, 0xB7, 0xFF),
             PetPhase.Complete => Color.FromRgb(0x6F, 0xE3, 0xB3),
             _ => null
-        }, $"{prefs.Mascot}|{prefs.Palette}");
+        });
     }
 
     private string SessionSummary()
@@ -326,6 +329,30 @@ public partial class PetWindow : Window
         settings.Closed += (_, _) => settings = null;
         settings.Show();
         settings.Activate();
+    }
+
+    private WorkshopWindow? workshop;
+
+    /// <summary>An edited or deleted pet shows up (or falls back to the cat) right away.</summary>
+    private void LibraryChanged() => Dispatcher.BeginInvoke(ApplyAppearance);
+
+    /// <summary>Makes a new pet and puts it on the desktop once saved.</summary>
+    private void OpenWorkshop()
+    {
+        if (workshop is { IsLoaded: true })
+        {
+            workshop.Activate();
+            return;
+        }
+        workshop = new WorkshopWindow(null, pet =>
+        {
+            prefs.Mascot = pet.Key;
+            prefs.Save();
+            ApplyAppearance();
+        }, prefs);
+        workshop.Closed += (_, _) => workshop = null;
+        workshop.Show();
+        workshop.Activate();
     }
 
     /// <summary>Adopts settings chosen in the settings window, keeping the mascot where it stands.</summary>
@@ -393,6 +420,7 @@ public partial class PetWindow : Window
         }
         menu.Items.Add(new Separator());
         menu.Items.Add(Item("Ayarlar…", OpenSettings));
+        menu.Items.Add(Item("Pet Workshop…", OpenWorkshop));
         menu.Items.Add(Item("Claude Desktop’ı aç", OpenClaude));
         menu.Items.Add(Item(prefs.Hidden ? "Maskotu göster" : "Maskotu gizle", () => SetHidden(!prefs.Hidden)));
         menu.Items.Add(Item("Bağlantı teşhisi…", OpenDiagnostics));
@@ -623,7 +651,7 @@ public partial class PetWindow : Window
     private void ResizeMascot(int change)
     {
         if (LeftClickLocked) return;
-        int size = Math.Clamp(prefs.MascotSize + change, 80, 150);
+        int size = Math.Clamp(prefs.MascotSize + change, Preferences.MinMascotSize, Preferences.MaxMascotSize);
         if (size == prefs.MascotSize) return;
         Relayout(() => prefs.Size = size);
         Pet.ApplyLook(prefs);

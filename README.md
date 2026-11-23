@@ -1,5 +1,7 @@
 # Petglare
 
+![Petglare](Assets/Petglare-README-Banner-2400x750.png)
+
 Petglare, Windows 11’de Claude Desktop’ın **Code → Local** oturumlarından gelen durumları gösteren küçük bir masaüstü maskotu.
 
 ## Kurulum
@@ -17,8 +19,8 @@ Kurulum, Claude’un kullanıcı ayarlarına yazar (`CLAUDE_CONFIG_DIR` tanıml�
 ## Maskotu kullanma
 
 - **Sol tık** Claude Desktop’ı açar. **Sürükleme** konumu değiştirir; ekran kenarına yakın bırakınca kenara yaslanır.
-- Maskotun üzerine gelince beliren **− / +** düğmeleri boyutu %80 ile %150 arasında değiştirir.
-- **Sağ tık** (maskotta veya bildirim alanındaki simgede) kısa bir menü açar: oturum listesi, **Ayarlar…**, Claude Desktop’ı aç, maskotu gizle, bağlantı teşhisi ve kapat.
+- Maskotun üzerine gelince beliren **− / +** düğmeleri boyutu %10’luk adımlarla %60 ile %200 arasında değiştirir.
+- **Sağ tık** (maskotta veya bildirim alanındaki simgede) kısa bir menü açar: oturum listesi, **Ayarlar…**, **Pet Workshop…**, Claude Desktop’ı aç, maskotu gizle, bağlantı teşhisi ve kapat.
 - **Ayarlar** penceresinde bütün kalıcı seçenekler tek yerde durur. Soldaki önizleme masaüstündeki maskotla aynı çizimi kullanır; çalışırken, onay, bitti, parıltı ve çoklu sohbet hallerine bakabilirsin. Değişiklikler **Uygula**’ya basınca masaüstündeki maskota geçer ve kaydedilir; **Kapat** uygulanmamış değişiklikleri bırakır.
 - Bildirim alanındaki simgeye **sol tık** maskotu gizler veya geri getirir. Simgedeki renkli nokta genel durumu gösterir: mavi çalışıyor, sarı senden bir şey bekliyor, kırmızı hata, yeşil bitti.
 - Petglare zaten açıkken `Petglare.exe` dosyasını tekrar çalıştırmak gizli maskotu geri getirir.
@@ -38,7 +40,7 @@ Balon, `VoxForge · Program.cs düzenleniyor` gibi önce projeyi, sonra yapılan
 
 ### Birden fazla oturum
 
-Petglare bütün Claude oturumlarını ayrı ayrı izler ve her sohbet için ayrı bir balon gösterir; balonlar alt alta dizilir (Ayarlar’dan 1–3 arası). En önemli sohbet maskota en yakın durur: senden bir şey bekleyen sohbet hatadan, hata çalışan sohbetten, çalışan sohbet bitmiş olandan önce gelir; eşitlikte en son hareket eden kazanır. Balonların boyutu Küçük, Normal veya Büyük olabilir. Aynı anda iki veya daha fazla oturum çalışıyorsa maskotun köşesinde sayı görünür. Bütün oturumların listesi menünün en üstünde ve maskotun ipucunda yer alır.
+Petglare bütün Claude oturumlarını ayrı ayrı izler ve her sohbet için ayrı bir balon gösterir; balonlar alt alta dizilir (Ayarlar’dan 1–3 arası). En önemli sohbet maskota en yakın durur: senden bir şey bekleyen sohbet hatadan, hata çalışan sohbetten, çalışan sohbet bitmiş olandan önce gelir; eşitlikte en son hareket eden kazanır. Balon boyutu %85 ile %130 arasında ayarlanır. Aynı anda iki veya daha fazla oturum çalışıyorsa maskotun köşesinde sayı görünür. Bütün oturumların listesi menünün en üstünde ve maskotun ipucunda yer alır.
 
 Bir yanıt bitince kalan parıltı, Claude Desktop penceresine geçtiğinde veya maskota tıklayıp Claude’u açtığında kaybolur. Claude Desktop hangi sohbetin açık olduğunu dışarıya bildirmediği için Petglare, Claude penceresine bakmayı sohbetleri görmüş sayar.
 
@@ -48,12 +50,29 @@ Menüdeki **Bildirimler** bölümünden Windows bildirimini ve kısa sesi ayrı 
 
 ### Görünüm ve ekranda kalma
 
-- **Maskot**: üç şekil (Kedi, Damla, Hayalet), beş renk, boyut ve saydamlık.
-- **Balonlar**: dört stil, üç boyut, aynı anda gösterilen sohbet sayısı, proje adı ve tamamlanma parıltısı.
+- **Maskot**: üç şekil (Kedi, Damla, Hayalet) ve kendi pet’lerin, beş renk, **Maskot boyutu** (%60–200) ve **Saydamlık** (%30–100).
+- **Balonlar**: dört stil, **Balon boyutu** (%85–130), aynı anda gösterilen sohbet sayısı, proje adı ve tamamlanma parıltısı.
 - **Her zaman en üstte**: maskotu her saniye yeniden en üste koyar; kenarlıksız pencere modundaki oyunların üstünde de kalır. Özel (exclusive) tam ekran modundaki oyunların üstüne Windows hiçbir pencereyi çizdirmez; o oyunlarda görüntü ayarından kenarlıksız pencereyi seç.
 - **Tam ekranda gizle**: aynı ekranda tam ekran bir uygulama açıkken maskotu saklar. Kapatırsan maskot oyunun, videonun veya sunumun üstünde kalır.
 - **Sol tık**: *Açık*, *Tam ekranda kapalı* veya *Kapalı*. Kapalıyken sol tık Claude’u açmaz, maskotu taşımaz ve − / + düğmeleri görünmez; sağ tık menüsü her zaman çalışır. Oyun oynarken yanlışlıkla tıklamaya karşı *Tam ekranda kapalı* seçeneği uygundur.
 - **Ekran kenarlarına yasla**, **Windows açılırken başlat** (`HKCU\…\Run`; EXE’yi taşırsan yeniden aç) ve **Sağ alt köşeye taşı**. Bir monitör çıkarılırsa maskot görünen bir ekrana geçer, monitör geri gelince eski yerine döner.
+
+Boyut ve saydamlık sürgüyle tam istediğin değere ayarlanır; altındaki hazır düğmeler (%80, Opak, Küçük…) sık kullanılan değerlere atlar. Sürgü odaktayken ok tuşları 1, Page Up / Page Down 10 adım değiştirir.
+
+### Pet Workshop: kendi pet’in
+
+**Ayarlar → Şekil** satırındaki **+** karosu veya menüdeki **Pet Workshop…** bir görseli maskota çevirir.
+
+1. Görseli sürükle, **Ctrl+V** ile yapıştır veya **Görsel seç…** (PNG, JPG, BMP, GIF, WebP).
+2. Arka planı sil:
+   - **Kenardan sil**: düz renkli arka planlar için; **Renk toleransı** benzer tonları da alır.
+   - **Yapay zekâ ile sil**: fotoğraflar için. İlk kullanımda U²-Net modeli (`u2netp.onnx`, 4,4 MB, [rembg](https://github.com/danielgatis/rembg), Apache-2.0) senin onayınla bir kez indirilir ve sabit SHA-256 ile doğrulanır. Model bilgisayarında çalışır; görselin hiçbir yere gönderilmez.
+3. İnce ayar: **Silgi** ve **Geri getir** fırçaları (boyut, sertlik; `[` `]`), tıklanan renk bölgesini silen **Sihirli değnek**, **Kırp**, **Kenarı daralt** (renk saçağını alır), **Kenarı yumuşat**, **Boşlukları kırp**, döndür ve çevir.
+4. Sağdaki ön izleme masaüstündeki görünümü gösterir. Ad verip **Kaydet**.
+
+Araçlar yalnız görselin üzerindeki maskeyi değiştirir; silinen yer **Geri getir** ile boyanabilir, **Ctrl+Z / Ctrl+Y** son 20 adımı geri alır. Tekerlek yakınlaştırır, sağ tık veya **Boşluk** ile sürükleme kaydırır, **Ctrl+0** sığdırır. Kısayollar: **E** silgi, **R** geri getir, **W** değnek, **C** kırp.
+
+Pet’ler `%LOCALAPPDATA%\Petglare\Pets` altında saklanır. Ayarlar’da kendi pet’ine sağ tıklayınca **Düzenle**, **Dışa aktar** (paylaşılabilir `.petglare` dosyası) ve **Sil** çıkar; **Pet dosyası içe aktar…** başkasının `.petglare` dosyasını ekler (yalnız görsel alınır, boyutu denetlenir ve yeniden kodlanır). Kendi pet’lerinde renkler görselden gelir; durum balonları, rozet ve parıltı aynen çalışır.
 
 ### Bağlantı teşhisi
 

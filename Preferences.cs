@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Petglare;
 
@@ -27,7 +28,11 @@ internal sealed class Preferences
 
     // Bubbles
     public string Bubble { get; set; } = "Gece";
-    public string BubbleSize { get; set; } = "Normal";
+    /// <summary>Bubble size in percent of the normal bubble (85–130).</summary>
+    public int? BubbleScale { get; set; }
+    /// <summary>Older files: "Küçük", "Normal" or "Büyük". Read once, never written.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BubbleSize { get; set; }
     public int MaxBubbles { get; set; } = 2;
     public bool ShowProject { get; set; } = true;
     public bool? ShowSpark { get; set; }
@@ -49,7 +54,25 @@ internal sealed class Preferences
     internal const string LeftClickFullScreenOff = "Tam ekranda kapalı";
     internal const string LeftClickOff = "Kapalı";
 
-    internal int MascotSize => Math.Clamp(Size ?? 100, 80, 150);
+    internal const int MinMascotSize = 60, MaxMascotSize = 200;
+    internal const int MinOpacity = 30;
+    internal const int MinBubbleScale = 85, MaxBubbleScale = 130;
+
+    internal int MascotSize => Math.Clamp(Size ?? 100, MinMascotSize, MaxMascotSize);
+    internal int OpacityPercent => Math.Clamp(Opacity, MinOpacity, 100);
+    internal int BubblePercent => Math.Clamp(BubbleScale ?? BubbleSize switch
+    {
+        "Küçük" => 92,
+        "Büyük" => 115,
+        _ => 100
+    }, MinBubbleScale, MaxBubbleScale);
+
+    /// <summary>Sets the bubble size and drops the old named size.</summary>
+    internal void SetBubbleScale(int percent)
+    {
+        BubbleScale = Math.Clamp(percent, MinBubbleScale, MaxBubbleScale);
+        BubbleSize = null;
+    }
     internal int BubbleCount => Math.Clamp(MaxBubbles, 1, 3);
 
     internal Preferences Clone() =>

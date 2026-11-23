@@ -58,17 +58,24 @@ public partial class PetView : UserControl
     /// <summary>The window size that holds the mascot and the configured number of bubbles.</summary>
     internal static Size WindowSize(Preferences prefs)
     {
-        var metrics = Appearance.Metrics(prefs.BubbleSize);
+        var metrics = Appearance.Metrics(prefs.BubblePercent);
         int count = prefs.BubbleCount;
         // 5 above, the bubbles and their gaps, then the tail, minus the overlap with the ears.
         double bubbles = 5 + count * metrics.Height + (count - 1) * BubbleGap + 8 - 3;
         double scale = prefs.MascotSize / 100.0;
         double mascot = MascotHeight + MascotBottomMargin + Math.Ceiling(MascotHeight * Math.Max(0, scale - 1));
-        return new Size(metrics.WindowWidth, Math.Ceiling(bubbles + mascot));
+        // A large mascot must still fit across the window.
+        double width = Math.Max(metrics.WindowWidth, Math.Ceiling(89 * scale) + 12);
+        return new Size(width, Math.Ceiling(bubbles + mascot));
     }
 
-    internal void ApplyLook(Preferences prefs)
+    /// <param name="picture">Shown instead of the chosen mascot (the Workshop preview).</param>
+    internal void ApplyLook(Preferences prefs, ImageSource? picture = null)
     {
+        var custom = picture ?? CustomPicture(prefs.Mascot);
+        Vector.Visibility = custom is null ? Visibility.Visible : Visibility.Collapsed;
+        Custom.Visibility = custom is null ? Visibility.Collapsed : Visibility.Visible;
+        CustomImage.Source = custom;
         var shape = Appearance.Shape(prefs.Mascot);
         var palette = Appearance.Colors(prefs.Palette);
         Body.Data = Geometry.Parse(shape.Body);
@@ -79,14 +86,29 @@ public partial class PetView : UserControl
         LeftEye.Fill = RightEye.Fill = Appearance.Brush(palette.Eyes);
         SessionBadge.BorderBrush = Appearance.Brush(palette.Body);
         MascotScale.ScaleX = MascotScale.ScaleY = prefs.MascotSize / 100.0;
-        Root.Opacity = Math.Clamp(prefs.Opacity, 30, 100) / 100.0;
+        Root.Opacity = prefs.OpacityPercent / 100.0;
+    }
+
+    private static readonly Dictionary<string, (DateTime Written, ImageSource Image)> pictures = new();
+
+    /// <summary>The picture of a user-made pet, cached until its file changes; null for built-in shapes or a missing pet.</summary>
+    internal static ImageSource? CustomPicture(string? mascot)
+    {
+        if (PetLibrary.Find(PetLibrary.IdOf(mascot)) is not { } pet) return null;
+        DateTime written;
+        try { written = System.IO.File.GetLastWriteTimeUtc(pet.ImagePath); }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException) { return null; }
+        if (pictures.TryGetValue(pet.Id, out var cached) && cached.Written == written) return cached.Image;
+        if (PetLibrary.LoadImage(pet) is not { } image) return null;
+        pictures[pet.Id] = (written, image);
+        return image;
     }
 
     /// <summary>Draws the bubbles, most important first, and the small badges on the mascot.</summary>
     internal void Render(Preferences prefs, IReadOnlyList<BubbleModel> bubbles, bool badge, int active)
     {
         var style = Appearance.Bubble(prefs.Bubble);
-        var metrics = Appearance.Metrics(prefs.BubbleSize);
+        var metrics = Appearance.Metrics(prefs.BubblePercent);
         BubbleStack.Children.Clear();
         tail = null;
         closest = null;
