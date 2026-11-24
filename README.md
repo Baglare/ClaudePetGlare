@@ -35,7 +35,7 @@ If you opted into automatic path repair during setup or in **Ayarlar → Ekranda
 
 ## Usage
 
-Left-click the mascot to open Claude Desktop; drag it to reposition it. Right-click the mascot or tray icon for sessions, **Ayarlar** (Settings), **Pet Workshop**, connection diagnostics and exit. The settings window offers live previews; choose **Uygula** (Apply) to save changes. The tray icon toggles mascot visibility. Right-click → **Boştaki oturumları temizle** clears inactive sessions without clearing active ones.
+Left-click the mascot to open Claude Desktop; drag it to reposition it. Hovering over the mascot shows nothing; change its size with **Ayarlar → Maskot boyutu** (Settings → Mascot size). Right-click the mascot or tray icon for sessions, **Ayarlar** (Settings), **Pet Workshop**, connection diagnostics and exit. The settings window offers live previews; choose **Uygula** (Apply) to save changes. The tray icon toggles mascot visibility. Right-click → **Boştaki oturumları temizle** clears inactive sessions without clearing active ones.
 
 | Status | Meaning |
 |---|---|
