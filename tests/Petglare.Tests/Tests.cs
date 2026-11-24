@@ -635,6 +635,13 @@ internal static class Tests
         fake.Pages["pets/bozuk-7/pet.png"] = tampered;
         WorkshopCatalog.Handler = fake;
         WorkshopCatalog.BaseUrl = "https://catalog.test/";
+        // Off until the user turns it on: no request leaves.
+        Check(!WorkshopCatalog.Enabled, "Workshop access starts off");
+        bool offRefused;
+        try { WorkshopCatalog.LoadAsync(default).GetAwaiter().GetResult(); offRefused = false; }
+        catch (InvalidOperationException) { offRefused = true; }
+        Check(offRefused && fake.Requests.Count == 0, "with access off, nothing is requested");
+        WorkshopCatalog.SetEnabled(true);
         var loaded = WorkshopCatalog.LoadAsync(default).GetAwaiter().GetResult();
         Check(loaded.Count == 3 && fake.Requests.Single() == "https://catalog.test/index.json", "catalog loads from the configured address only");
         bool tamperRefused;
@@ -652,12 +659,62 @@ internal static class Tests
         fake.HideLength = false;
         fake.Pages["index.json"] = System.Text.Encoding.UTF8.GetBytes(catalogJson);
 
+        // Real PNG size is checked against 512 px and the catalog, before any decoding
+        var mor = loaded.First(p => p.Id == "mor-kedi-1");
+        Check(WorkshopCatalog.PngSize(catPng) == (64, 48) && WorkshopCatalog.PngSize(new byte[] { 1, 2, 3 }) is null,
+            "PNG header size is read without decoding");
+        CatalogPet Claiming(byte[] png, int w, int h) => mor with
+        {
+            Id = "sahte-8", Path = "pets/sahte-8/pet.png", Bytes = png.Length, Width = w, Height = h,
+            Sha256 = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(png))
+        };
+        var giantPng = PngHeader(4000, 4000);
+        bool Refuses(CatalogPet pet, byte[] png)
+        {
+            fake.Pages[pet.Path] = png;
+            try { WorkshopCatalog.DownloadAsync(pet, default).GetAwaiter().GetResult(); return false; }
+            catch (InvalidDataException) { return true; }
+        }
+        Check(Refuses(Claiming(giantPng, 64, 48), giantPng), "a 4000×4000 PNG listed as 64×48 is refused");
+        Check(Refuses(Claiming(catPng, 64, 50), catPng), "a PNG whose size differs from the catalog is refused");
+        var jpeg = new MemoryStream();
+        var jenc = new JpegBitmapEncoder(); jenc.Frames.Add(BitmapFrame.Create(SolidBitmap(64, 48))); jenc.Save(jpeg);
+        var jpegBytes = jpeg.ToArray();
+        Check(Refuses(Claiming(jpegBytes, 64, 48), jpegBytes), "a non-PNG file is refused");
+        bool cachedRefused;
+        var cachedLie = Claiming(giantPng, 64, 48);
+        fake.Pages[cachedLie.Path] = giantPng;
+        try { WorkshopCatalog.InstallAsync(cachedLie, giantPng, default).GetAwaiter().GetResult(); cachedRefused = false; }
+        catch (InvalidDataException) { cachedRefused = true; }
+        Check(cachedRefused, "cached bytes go through the same size check before import");
+        Check(!Throws(() => WorkshopCatalog.Verify(mor, catPng)), "a matching 64×48 PNG passes");
+
+        // Turning access off stops requests in flight and refuses new ones
+        fake.Hold = new TaskCompletionSource();
+        var inFlight = WorkshopCatalog.LoadAsync(default);
+        WorkshopCatalog.SetEnabled(false);
+        bool inFlightCancelled;
+        try { inFlight.GetAwaiter().GetResult(); inFlightCancelled = false; }
+        catch (OperationCanceledException) { inFlightCancelled = true; }
+        fake.Hold = null;
+        int requestsBefore = fake.Requests.Count;
+        Check(inFlightCancelled && Throws(() => WorkshopCatalog.DownloadAsync(mor, default).GetAwaiter().GetResult())
+              && fake.Requests.Count == requestsBefore, "turning the Workshop off cancels a request in flight and blocks new ones");
+        WorkshopCatalog.SetEnabled(true);
+
         var catalogWindow = new CatalogWindow { Left = -10000, Top = -10000, ShowActivated = false, ShowInTaskbar = false };
         catalogWindow.Show();
         catalogWindow.LoadAsync().GetAwaiter().GetResult();
         for (int spin = 0; spin < 20; spin++)
             System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
         Check(catalogWindow.Shown == 3, "the catalog window lists the valid pets");
+        var openWhileOff = new CatalogWindow { Left = -10000, Top = -10000, ShowActivated = false, ShowInTaskbar = false };
+        bool closedByOff = false;
+        openWhileOff.Closed += (_, _) => closedByOff = true;
+        openWhileOff.Show();
+        WorkshopCatalog.SetEnabled(false);
+        Check(closedByOff, "turning the Workshop off closes an open catalog window");
+        WorkshopCatalog.SetEnabled(true);
         catalogWindow.UpdateLayout();
         var cContent = (FrameworkElement)catalogWindow.Content;
         var cHost = new Border { Background = catalogWindow.Background, Child = null };
@@ -672,6 +729,7 @@ internal static class Tests
         var cenc = new PngBitmapEncoder(); cenc.Frames.Add(BitmapFrame.Create(cbmp));
         using (var fs = File.Create(Path.Combine(outDir, "c1-catalog.png"))) cenc.Save(fs);
         catalogWindow.Close();
+        WorkshopCatalog.SetEnabled(false);
         WorkshopCatalog.Handler = null;
 
         var submitUrl = WorkshopCatalog.SubmitUrl("Mor & Kedi");
@@ -815,19 +873,22 @@ internal static class Tests
         public readonly Dictionary<string, byte[]> Pages = new();
         public readonly List<string> Requests = new();
         public bool HideLength;
+        /// <summary>When set, requests wait for it (or for cancellation), like a slow connection.</summary>
+        public TaskCompletionSource? Hold;
 
-        protected override Task<System.Net.Http.HttpResponseMessage> SendAsync(System.Net.Http.HttpRequestMessage request,
+        protected override async Task<System.Net.Http.HttpResponseMessage> SendAsync(System.Net.Http.HttpRequestMessage request,
             System.Threading.CancellationToken cancel)
         {
             var url = request.RequestUri!.ToString();
             Requests.Add(url);
+            if (Hold is { } hold) await hold.Task.WaitAsync(cancel);
             var path = request.RequestUri.AbsolutePath.TrimStart('/');
             if (!Pages.TryGetValue(path, out var body))
-                return Task.FromResult(new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
+                return new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.NotFound);
             System.Net.Http.HttpContent content = HideLength
                 ? new System.Net.Http.StreamContent(new UnknownLength(body))
                 : new System.Net.Http.ByteArrayContent(body);
-            return Task.FromResult(new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = content });
+            return new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = content };
         }
 
         /// <summary>A stream that does not tell its length, like a chunked response.</summary>
@@ -841,6 +902,7 @@ internal static class Tests
     static int CatalogCheck(string baseUrl, string libraryRoot)
     {
         WorkshopCatalog.BaseUrl = baseUrl.EndsWith('/') ? baseUrl : baseUrl + "/";
+        WorkshopCatalog.SetEnabled(true);
         PetLibrary.Root = libraryRoot;
         var app = new Application();
         var pets = WorkshopCatalog.LoadAsync(default).GetAwaiter().GetResult();

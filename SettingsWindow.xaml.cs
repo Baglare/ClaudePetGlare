@@ -44,7 +44,12 @@ public partial class SettingsWindow : Window
         statusTimer.Tick += (_, _) => { statusTimer.Stop(); Status.Text = ""; };
         SourceInitialized += (_, _) => UseDarkTitleBar();
         PetLibrary.Changed += LibraryChanged;
-        Closed += (_, _) => PetLibrary.Changed -= LibraryChanged;
+        Closed += (_, _) =>
+        {
+            PetLibrary.Changed -= LibraryChanged;
+            // Closing without applying returns to the saved choice.
+            WorkshopCatalog.SetEnabled(current.WorkshopOnline);
+        };
         Build();
     }
 
@@ -98,7 +103,13 @@ public partial class SettingsWindow : Window
         Switch("Workshop’a bağlan (internet)",
             "Açıkken Petglare yalnız Workshop kataloğunu ve eklediğin pet görsellerini GitHub’dan (raw.githubusercontent.com) okur. "
             + "Kapalıyken Workshop için internete hiç bağlanmaz. Pet göndermek tarayıcıda GitHub formuyla olur.",
-            draft.WorkshopOnline, v => { draft.WorkshopOnline = v; browse.IsEnabled = v; });
+            draft.WorkshopOnline, v =>
+            {
+                draft.WorkshopOnline = v;
+                browse.IsEnabled = v;
+                // Takes effect at once: off closes an open catalog and stops its downloads.
+                WorkshopCatalog.SetEnabled(v);
+            });
         browse.Click += (_, _) => OpenCatalog();
         Sections.Children.Add(browse);
 

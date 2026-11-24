@@ -111,6 +111,7 @@ public partial class PetWindow : Window
             RenderStatus();
             CheckHooksAtStartup();
             PetLibrary.Changed += LibraryChanged;
+            WorkshopCatalog.SetEnabled(prefs.WorkshopOnline);
         };
         // An unsaved Workshop may refuse to close; then the mascot stays too, so nothing is left half shut.
         Closing += (_, e) => { if (!CloseWorkshop()) e.Cancel = true; };
@@ -370,6 +371,7 @@ public partial class PetWindow : Window
     {
         Relayout(() => prefs.CopySettingsFrom(chosen));
         ApplyAppearance();
+        WorkshopCatalog.SetEnabled(prefs.WorkshopOnline);
         SavePreferences();
         prefs.Save();
         CheckFullScreen();

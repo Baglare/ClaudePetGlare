@@ -49,7 +49,13 @@ internal sealed class CatalogWindow : Window
         FontSize = 13;
         UseLayoutRounding = true;
         SourceInitialized += (_, _) => UseDarkTitleBar();
-        Closed += (_, _) => closing.Cancel();
+        // Turning the Workshop off closes this window and stops what it was downloading.
+        WorkshopCatalog.Disabled += OnDisabled;
+        Closed += (_, _) =>
+        {
+            WorkshopCatalog.Disabled -= OnDisabled;
+            closing.Cancel();
+        };
 
         var heading = new TextBlock { Text = "Workshop", FontFamily = new FontFamily("Segoe UI Variable Display, Segoe UI"),
             FontSize = 22, FontWeight = FontWeights.SemiBold };
@@ -95,6 +101,13 @@ internal sealed class CatalogWindow : Window
         Loaded += async (_, _) => await LoadAsync();
     }
 
+    private void OnDisabled()
+    {
+        closing.Cancel();
+        if (Dispatcher.CheckAccess()) Close();
+        else Dispatcher.BeginInvoke(Close);
+    }
+
     internal async Task LoadAsync()
     {
         status.Text = "Katalog yükleniyor…";
@@ -106,7 +119,8 @@ internal sealed class CatalogWindow : Window
             ShowPets();
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) when (ex is HttpRequestException or InvalidDataException or System.Text.Json.JsonException or IOException)
+        catch (Exception ex) when (ex is HttpRequestException or InvalidDataException or System.Text.Json.JsonException or IOException
+                                       or InvalidOperationException)
         {
             status.Text = "Workshop'a ulaşılamadı: " + ex.Message;
         }
@@ -174,7 +188,7 @@ internal sealed class CatalogWindow : Window
             target.Source = PetImage.Decode(new MemoryStream(png, writable: false), 192);
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) when (ex is HttpRequestException or InvalidDataException or IOException)
+        catch (Exception ex) when (ex is HttpRequestException or InvalidDataException or IOException or InvalidOperationException)
         {
             target.ToolTip = "Görsel yüklenemedi";
         }
