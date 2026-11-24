@@ -21,7 +21,7 @@ Kurulum, Claude’un kullanıcı ayarlarına yazar (`CLAUDE_CONFIG_DIR` tanıml�
 ## Maskotu kullanma
 
 - **Sol tık** Claude Desktop’ı açar. **Sürükleme** konumu değiştirir; ekran kenarına yakın bırakınca kenara yaslanır.
-- Maskotun üzerine gelince beliren **− / +** düğmeleri boyutu %10’luk adımlarla %60 ile %200 arasında değiştirir.
+- Maskotun boyutu **Ayarlar → Maskot boyutu** sürgüsüyle %60 ile %200 arasında değişir. Üzerine gelince hiçbir düğme veya kutu açılmaz; oturum listesi sağ tık menüsünde ve bildirim alanı simgesinin ipucunda.
 - **Sağ tık** (maskotta veya bildirim alanındaki simgede) kısa bir menü açar: oturum listesi, **Ayarlar…**, **Pet Workshop…**, Claude Desktop’ı aç, maskotu gizle, bağlantı teşhisi ve kapat.
 - **Ayarlar** penceresinde bütün kalıcı seçenekler tek yerde durur. Soldaki önizleme masaüstündeki maskotla aynı çizimi kullanır; çalışırken, onay, bitti, parıltı ve çoklu sohbet hallerine bakabilirsin. Değişiklikler **Uygula**’ya basınca masaüstündeki maskota geçer ve kaydedilir; **Kapat** uygulanmamış değişiklikleri bırakır.
 - Bildirim alanındaki simgeye **sol tık** maskotu gizler veya geri getirir. Simgedeki renkli nokta genel durumu gösterir: mavi çalışıyor, sarı senden bir şey bekliyor, kırmızı hata, yeşil bitti.
@@ -56,7 +56,7 @@ Menüdeki **Bildirimler** bölümünden Windows bildirimini ve kısa sesi ayrı 
 - **Balonlar**: dört stil, **Balon boyutu** (%85–130), aynı anda gösterilen sohbet sayısı, proje adı ve tamamlanma parıltısı.
 - **Her zaman en üstte**: maskotu her saniye yeniden en üste koyar; kenarlıksız pencere modundaki oyunların üstünde de kalır. Özel (exclusive) tam ekran modundaki oyunların üstüne Windows hiçbir pencereyi çizdirmez; o oyunlarda görüntü ayarından kenarlıksız pencereyi seç.
 - **Tam ekranda gizle** (varsayılan kapalı): açarsan aynı ekranda tam ekran bir uygulama açıkken maskot saklanır. Kapalıyken maskot kenarlıksız oyunun, videonun veya sunumun üstünde kalır. Daha önce kaydedilmiş seçim korunur.
-- **Sol tık**: *Açık*, *Tam ekranda kapalı* veya *Kapalı*. Kapalıyken sol tık Claude’u açmaz, maskotu taşımaz ve − / + düğmeleri görünmez; sağ tık menüsü her zaman çalışır. Oyun oynarken yanlışlıkla tıklamaya karşı *Tam ekranda kapalı* seçeneği uygundur.
+- **Sol tık**: *Açık*, *Tam ekranda kapalı* veya *Kapalı*. Kapalıyken sol tık Claude’u açmaz ve maskotu taşımaz; sağ tık menüsü her zaman çalışır. Oyun oynarken yanlışlıkla tıklamaya karşı *Tam ekranda kapalı* seçeneği uygundur.
 - **Ekran kenarlarına yasla**, **Windows açılırken başlat** (`HKCU\…\Run`; otomatik onarım izni verilirse klasör taşınınca güncellenir) ve **Sağ alt köşeye taşı**. Bir monitör çıkarılırsa maskot görünen bir ekrana geçer, monitör geri gelince eski yerine döner.
 - Maskot monitörün tamamında dolaşır: görev çubuğunun üstüne binebilir ve ekranın gerçek kenarlarına kadar gider. Kenara yaslanma ekran kenarına tam bitişik, görev çubuğu kenarına ise küçük bir boşlukla oturur; hangisi yakınsa onu seçer. Varsayılan konum ve **Sağ alt köşeye taşı** görev çubuğunun üstünde kalır.
 

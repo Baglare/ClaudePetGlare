@@ -79,8 +79,6 @@ public partial class PetWindow : Window
         canvas.MouseMove += Drag;
         canvas.LostMouseCapture += FinishDrag;
         canvas.MouseRightButtonUp += MascotMenu;
-        Pet.ShrinkRequested += () => ResizeMascot(-10);
-        Pet.EnlargeRequested += () => ResizeMascot(10);
 
         timer.Tick += (_, _) =>
         {
@@ -300,9 +298,8 @@ public partial class PetWindow : Window
             bubbles.Add(new BubbleModel(null, systemMessage, systemWarning ? BubbleTone.Warning : BubbleTone.Normal));
         Pet.Render(prefs, bubbles, state.ShowBadge, state.ActiveCount);
 
-        var summary = SessionSummary();
-        Pet.MascotCanvas.ToolTip = summary;
-        tray.SetText(summary);
+        // The session list lives in the right-click menu and the tray tooltip; hovering the mascot shows nothing.
+        tray.SetText(SessionSummary());
         tray.Update(speaking.FirstOrDefault()?.Phase switch
         {
             PetPhase.Attention => Color.FromRgb(0xFF, 0xC4, 0x3D),
@@ -713,16 +710,6 @@ public partial class PetWindow : Window
     private Point CurrentAnchor(Bounds bounds) => new(
         bounds.Left + (int)Math.Round(Pet.MascotOffset.X * VisualTreeHelper.GetDpi(this).DpiScaleX),
         bounds.Top);
-
-    private void ResizeMascot(int change)
-    {
-        if (LeftClickLocked) return;
-        int size = Math.Clamp(prefs.MascotSize + change, Preferences.MinMascotSize, Preferences.MaxMascotSize);
-        if (size == prefs.MascotSize) return;
-        Relayout(() => prefs.Size = size);
-        Pet.ApplyLook(prefs);
-        SavePreferences();
-    }
 
     /// <summary>
     /// Applies a change that resizes the window (mascot size, bubble size or count) while the

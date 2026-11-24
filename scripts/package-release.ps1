@@ -15,14 +15,16 @@ Copy-Item -LiteralPath (Join-Path $root 'Assets\Petglare-README-Banner-2400x750.
 # Use the license and notices shipped in the restored NuGet packages, not a mutable URL.
 $assets = Get-Content -Raw (Join-Path $root 'obj\project.assets.json') | ConvertFrom-Json
 $packageRoots = @($assets.packageFolders.PSObject.Properties.Name)
+# Culture-invariant: on Turkish Windows 'NOTICE' would not match 'Notices' case-insensitively (dotted/dotless i).
+$nameMatch = [System.Text.RegularExpressions.RegexOptions]'IgnoreCase, CultureInvariant'
 foreach ($packageId in @('microsoft.ml.onnxruntime','microsoft.ml.onnxruntime.managed')) {
     $relative = ($assets.libraries.PSObject.Properties | Where-Object { $_.Name -like "$packageId/*" } | Select-Object -First 1).Value.path
     if (-not $relative) { throw "Missing restored package $packageId" }
     $package = $packageRoots | ForEach-Object { Join-Path $_ $relative } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
     if (-not $package) { throw "Missing package directory: $packageId" }
-    $documents = @(Get-ChildItem -LiteralPath $package -File -Recurse | Where-Object { $_.Name -match '^(LICENSE|LICENCE|ThirdPartyNotices|THIRD-PARTY-NOTICES|NOTICE)(\.[a-z0-9]+)?$' })
-    if (-not ($documents | Where-Object { $_.Name -match '^(LICENSE|LICENCE)(\.|$)' })) { throw "Missing license in $packageId" }
-    if ($packageId -eq 'microsoft.ml.onnxruntime' -and -not ($documents | Where-Object { $_.Name -match 'NOTICE' })) { throw "Missing notices in $packageId" }
+    $documents = @(Get-ChildItem -LiteralPath $package -File -Recurse | Where-Object { [regex]::IsMatch($_.Name, '^(LICENSE|LICENCE|ThirdPartyNotices|THIRD-PARTY-NOTICES|NOTICE)(\.[a-z0-9]+)?$', $nameMatch) })
+    if (-not ($documents | Where-Object { [regex]::IsMatch($_.Name, '^(LICENSE|LICENCE)(\.|$)', $nameMatch) })) { throw "Missing license in $packageId" }
+    if ($packageId -eq 'microsoft.ml.onnxruntime' -and -not ($documents | Where-Object { [regex]::IsMatch($_.Name, 'NOTICE', $nameMatch) })) { throw "Missing notices in $packageId" }
     foreach ($doc in $documents) {
         $relativeDoc = $doc.FullName.Substring($package.Length).TrimStart('\','/')
         $name = "$packageId-$($relativeDoc -replace '[\\/]','-')"

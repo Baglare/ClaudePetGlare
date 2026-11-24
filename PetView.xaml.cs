@@ -28,19 +28,16 @@ public partial class PetView : UserControl
     private FrameworkElement? closest;
     private bool interactive = true;
 
-    internal event Action? ShrinkRequested;
-    internal event Action? EnlargeRequested;
 
     public PetView() => InitializeComponent();
 
-    /// <summary>Whether the hover − / + buttons appear.</summary>
+    /// <summary>Whether the mascot reacts to the left button (hand cursor). Nothing pops up on hover.</summary>
     internal bool Interactive
     {
         get => interactive;
         set
         {
             interactive = value;
-            ResizeButtons.Visibility = value && Mascot.IsMouseOver ? Visibility.Visible : Visibility.Hidden;
             MascotCanvas.Cursor = value ? Cursors.Hand : Cursors.Arrow;
         }
     }
@@ -221,9 +218,4 @@ public partial class PetView : UserControl
     private void StackSizeChanged(object sender, SizeChangedEventArgs e) => UpdateBubblePlacement();
     private void ViewSizeChanged(object sender, SizeChangedEventArgs e) => UpdateBubblePlacement();
 
-    private void MascotHover(object sender, MouseEventArgs e) =>
-        ResizeButtons.Visibility = interactive && Mascot.IsMouseOver ? Visibility.Visible : Visibility.Hidden;
-
-    private void ShrinkClick(object sender, RoutedEventArgs e) => ShrinkRequested?.Invoke();
-    private void EnlargeClick(object sender, RoutedEventArgs e) => EnlargeRequested?.Invoke();
 }

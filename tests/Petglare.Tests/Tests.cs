@@ -445,6 +445,8 @@ internal static class Tests
         var iconSizes = TrayIcon.AppIconDecoder.Frames.Select(f => f.PixelWidth).ToHashSet();
         Check(iconSizes.IsSupersetOf(new[] { 16, 32, 256 }), "app icon has 16/32/256 px frames");
         Check(w.Icon != null && settingsWindow.Icon != null, "windows use the app icon");
+        Check(w.Pet.MascotCanvas.ToolTip is null && w.Pet.Mascot.ToolTip is null && FindChild<Button>(w.Pet) is null,
+            "hovering the mascot shows no tooltip and no buttons, even with sessions running");
         void SettingsShot(string name, double offset)
         {
             var scroller = FindChild<ScrollViewer>(settingsWindow)!;
@@ -680,8 +682,10 @@ internal static class Tests
         fake.Pages["pets/bozuk-7/pet.png"] = tampered;
         WorkshopCatalog.Handler = fake;
         WorkshopCatalog.BaseUrl = "https://catalog.test/";
+        // The settings window above restores the user's real saved choice when it closes; start this check from "off".
+        WorkshopCatalog.SetEnabled(false);
         // Off until the user turns it on: no request leaves.
-        Check(!WorkshopCatalog.Enabled, "Workshop access starts off");
+        Check(!WorkshopCatalog.Enabled, "Workshop access is off when turned off");
         bool offRefused;
         try { WorkshopCatalog.LoadAsync(default).GetAwaiter().GetResult(); offRefused = false; }
         catch (InvalidOperationException) { offRefused = true; }

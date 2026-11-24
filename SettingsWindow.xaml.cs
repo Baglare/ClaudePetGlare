@@ -75,7 +75,7 @@ public partial class SettingsWindow : Window
         customColorHint = Hint("Kendi pet’lerinde renkler görselden gelir.");
         Sections.Children.Add(customColorHint);
         UpdateSwatches();
-        Row("Maskot boyutu", "Maskotun üzerindeki − / + düğmeleriyle de değiştirebilirsin.",
+        Row("Maskot boyutu", null,
             Fine(Preferences.MinMascotSize, Preferences.MaxMascotSize, draft.MascotSize,
                 Appearance.MascotSizes.Select(s => ($"%{s}", s)), v => $"%{v}", v => draft.Size = v));
         Row("Saydamlık", null,
@@ -119,7 +119,7 @@ public partial class SettingsWindow : Window
             draft.AlwaysOnTop, v => draft.AlwaysOnTop = v);
         Switch("Tam ekranda gizle", "Aynı ekranda tam ekran bir uygulama açıkken maskot saklanır.",
             draft.HideInFullScreen, v => draft.HideInFullScreen = v);
-        Row("Sol tık", "Kapalıyken sol tık Claude’u açmaz, maskotu taşımaz ve boyutunu değiştirmez. "
+        Row("Sol tık", "Kapalıyken sol tık Claude’u açmaz ve maskotu taşımaz. "
             + "Menü için sağ tık her zaman çalışır.",
             Segments(new[] { Preferences.LeftClickOn, Preferences.LeftClickFullScreenOff, Preferences.LeftClickOff }
                 .Select(m => (m, m)), draft.LeftClick, v => draft.LeftClick = v));
