@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -22,6 +24,7 @@ internal static class Tests
     static int Main(string[] args)
     {
         if (args.Length == 4 && args[0] == "--bench") return Bench.Run(args[1], args[2], args[3]);
+        if (args.Length == 3 && args[0] == "--catalog-check") return CatalogCheck(args[1], args[2]);
         // Parsing
         var edit = Parse(new { hook_event_name = "PreToolUse", session_id = "s1", cwd = @"C:\Projeler\VoxForge", tool_name = "Edit", tool_input = new { file_path = @"C:\Projeler\VoxForge\App.cs" } });
         Check(edit is { Event: HookEvent.Tool, Tool: ToolKind.Edit, FileName: "App.cs", Project: "VoxForge" }, "edit parsed with project and file");
@@ -605,11 +608,142 @@ internal static class Tests
         Check(previewPicture.Mask.All(m => m == 255), "undo brings the background back");
         preview.Confirm = _ => true;
         preview.Close();
+
+        // v1.2 online Workshop: off by default; everything read is checked
+        Check(!new Preferences().WorkshopOnline, "the Workshop is offline by default");
+        var catPng = EncodePng(SolidBitmap(64, 48));
+        var catSha = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(catPng));
+        string Entry(string id, string? path = null, long? bytes = null, string? sha = null, int w = 64, string name = "Mor kedi") =>
+            JsonSerializer.Serialize(new { id, name, author = "Baglare", created = "2026-11-24T00:00:00+00:00",
+                path = path ?? $"pets/{id}/pet.png", bytes = bytes ?? catPng.Length, width = w, height = 48, sha256 = sha ?? catSha });
+        var catalogJson = "{\"format\":\"petglare-catalog-v1\",\"pets\":[" + string.Join(",",
+            Entry("mor-kedi-1"), Entry("../evil"), Entry("yol-2", path: "pets/baska/pet.png"), Entry("buyuk-3", bytes: 400_000),
+            Entry("hash-4", sha: "abc"), Entry("mor-kedi-1"), Entry("genis-5", w: 2000), Entry("tamam-6", name: "‮Ters\u0007"),
+            Entry("bozuk-7")) + "]}";
+        var parsed = WorkshopCatalog.Parse(System.Text.Encoding.UTF8.GetBytes(catalogJson));
+        Check(parsed.Select(p => p.Id).SequenceEqual(new[] { "mor-kedi-1", "tamam-6", "bozuk-7" }),
+            "catalog keeps valid entries only: " + string.Join(",", parsed.Select(p => p.Id)));
+        Check(parsed.First(p => p.Id == "tamam-6").Name == "Ters", "catalog names are cleaned of control and bidi characters");
+        Check(Throws(() => WorkshopCatalog.Parse("{\"format\":\"baska\",\"pets\":[]}"u8.ToArray())), "an unknown catalog format is refused");
+
+        var fake = new FakeWeb();
+        fake.Pages["index.json"] = System.Text.Encoding.UTF8.GetBytes(catalogJson);
+        fake.Pages["pets/mor-kedi-1/pet.png"] = catPng;
+        fake.Pages["pets/tamam-6/pet.png"] = catPng;
+        var tampered = (byte[])catPng.Clone();
+        tampered[^20] ^= 0xFF;
+        fake.Pages["pets/bozuk-7/pet.png"] = tampered;
+        WorkshopCatalog.Handler = fake;
+        WorkshopCatalog.BaseUrl = "https://catalog.test/";
+        // Off until the user turns it on: no request leaves.
+        Check(!WorkshopCatalog.Enabled, "Workshop access starts off");
+        bool offRefused;
+        try { WorkshopCatalog.LoadAsync(default).GetAwaiter().GetResult(); offRefused = false; }
+        catch (InvalidOperationException) { offRefused = true; }
+        Check(offRefused && fake.Requests.Count == 0, "with access off, nothing is requested");
+        WorkshopCatalog.SetEnabled(true);
+        var loaded = WorkshopCatalog.LoadAsync(default).GetAwaiter().GetResult();
+        Check(loaded.Count == 3 && fake.Requests.Single() == "https://catalog.test/index.json", "catalog loads from the configured address only");
+        bool tamperRefused;
+        try { WorkshopCatalog.DownloadAsync(loaded.First(p => p.Id == "bozuk-7"), default).GetAwaiter().GetResult(); tamperRefused = false; }
+        catch (InvalidDataException) { tamperRefused = true; }
+        Check(tamperRefused, "a picture that does not match its checksum is refused");
+        var installedPet = WorkshopCatalog.InstallAsync(loaded.First(p => p.Id == "mor-kedi-1"), null, default).GetAwaiter().GetResult();
+        Check(installedPet.Origin == "workshop:mor-kedi-1" && installedPet.Name == "Mor kedi" && WorkshopCatalog.Installed().Contains("mor-kedi-1"),
+            "a catalog pet is added with its origin");
+        Check(PetLibrary.Find(installedPet.Id)?.Origin == "workshop:mor-kedi-1", "origin survives reloading");
+        fake.Pages["index.json"] = new byte[WorkshopCatalog.MaxIndexBytes + 10];
+        Check(Throws(() => WorkshopCatalog.LoadAsync(default).GetAwaiter().GetResult()), "an oversized catalog is refused");
+        fake.HideLength = true;
+        Check(Throws(() => WorkshopCatalog.LoadAsync(default).GetAwaiter().GetResult()), "an oversized catalog without a length is refused while reading");
+        fake.HideLength = false;
+        fake.Pages["index.json"] = System.Text.Encoding.UTF8.GetBytes(catalogJson);
+
+        // Real PNG size is checked against 512 px and the catalog, before any decoding
+        var mor = loaded.First(p => p.Id == "mor-kedi-1");
+        Check(WorkshopCatalog.PngSize(catPng) == (64, 48) && WorkshopCatalog.PngSize(new byte[] { 1, 2, 3 }) is null,
+            "PNG header size is read without decoding");
+        CatalogPet Claiming(byte[] png, int w, int h) => mor with
+        {
+            Id = "sahte-8", Path = "pets/sahte-8/pet.png", Bytes = png.Length, Width = w, Height = h,
+            Sha256 = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(png))
+        };
+        var giantPng = PngHeader(4000, 4000);
+        bool Refuses(CatalogPet pet, byte[] png)
+        {
+            fake.Pages[pet.Path] = png;
+            try { WorkshopCatalog.DownloadAsync(pet, default).GetAwaiter().GetResult(); return false; }
+            catch (InvalidDataException) { return true; }
+        }
+        Check(Refuses(Claiming(giantPng, 64, 48), giantPng), "a 4000×4000 PNG listed as 64×48 is refused");
+        Check(Refuses(Claiming(catPng, 64, 50), catPng), "a PNG whose size differs from the catalog is refused");
+        var jpeg = new MemoryStream();
+        var jenc = new JpegBitmapEncoder(); jenc.Frames.Add(BitmapFrame.Create(SolidBitmap(64, 48))); jenc.Save(jpeg);
+        var jpegBytes = jpeg.ToArray();
+        Check(Refuses(Claiming(jpegBytes, 64, 48), jpegBytes), "a non-PNG file is refused");
+        bool cachedRefused;
+        var cachedLie = Claiming(giantPng, 64, 48);
+        fake.Pages[cachedLie.Path] = giantPng;
+        try { WorkshopCatalog.InstallAsync(cachedLie, giantPng, default).GetAwaiter().GetResult(); cachedRefused = false; }
+        catch (InvalidDataException) { cachedRefused = true; }
+        Check(cachedRefused, "cached bytes go through the same size check before import");
+        Check(!Throws(() => WorkshopCatalog.Verify(mor, catPng)), "a matching 64×48 PNG passes");
+
+        // Turning access off stops requests in flight and refuses new ones
+        fake.Hold = new TaskCompletionSource();
+        var inFlight = WorkshopCatalog.LoadAsync(default);
+        WorkshopCatalog.SetEnabled(false);
+        bool inFlightCancelled;
+        try { inFlight.GetAwaiter().GetResult(); inFlightCancelled = false; }
+        catch (OperationCanceledException) { inFlightCancelled = true; }
+        fake.Hold = null;
+        int requestsBefore = fake.Requests.Count;
+        Check(inFlightCancelled && Throws(() => WorkshopCatalog.DownloadAsync(mor, default).GetAwaiter().GetResult())
+              && fake.Requests.Count == requestsBefore, "turning the Workshop off cancels a request in flight and blocks new ones");
+        WorkshopCatalog.SetEnabled(true);
+
+        var catalogWindow = new CatalogWindow { Left = -10000, Top = -10000, ShowActivated = false, ShowInTaskbar = false };
+        catalogWindow.Show();
+        catalogWindow.LoadAsync().GetAwaiter().GetResult();
+        for (int spin = 0; spin < 20; spin++)
+            System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+        Check(catalogWindow.Shown == 3, "the catalog window lists the valid pets");
+        var openWhileOff = new CatalogWindow { Left = -10000, Top = -10000, ShowActivated = false, ShowInTaskbar = false };
+        bool closedByOff = false;
+        openWhileOff.Closed += (_, _) => closedByOff = true;
+        openWhileOff.Show();
+        WorkshopCatalog.SetEnabled(false);
+        Check(closedByOff, "turning the Workshop off closes an open catalog window");
+        WorkshopCatalog.SetEnabled(true);
+        catalogWindow.UpdateLayout();
+        var cContent = (FrameworkElement)catalogWindow.Content;
+        var cHost = new Border { Background = catalogWindow.Background, Child = null };
+        var cbmp = new RenderTargetBitmap((int)catalogWindow.ActualWidth, (int)catalogWindow.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+        var cVisual = new DrawingVisual();
+        using (var dc = cVisual.RenderOpen())
+        {
+            dc.DrawRectangle(catalogWindow.Background, null, new Rect(0, 0, catalogWindow.ActualWidth, catalogWindow.ActualHeight));
+            dc.DrawRectangle(new VisualBrush(cContent), null, new Rect(0, 0, cContent.ActualWidth, cContent.ActualHeight));
+        }
+        cbmp.Render(cVisual);
+        var cenc = new PngBitmapEncoder(); cenc.Frames.Add(BitmapFrame.Create(cbmp));
+        using (var fs = File.Create(Path.Combine(outDir, "c1-catalog.png"))) cenc.Save(fs);
+        catalogWindow.Close();
+        WorkshopCatalog.SetEnabled(false);
+        WorkshopCatalog.Handler = null;
+
+        var submitUrl = WorkshopCatalog.SubmitUrl("Mor & Kedi");
+        Check(submitUrl.StartsWith("https://github.com/Baglare/Petglare-Workshop/issues/new?template=pet.yml", StringComparison.Ordinal)
+              && submitUrl.Contains("pet-name=Mor%20%26%20Kedi"), "the send form address is built and escaped");
+        var outbox = Path.Combine(petRoot, "outbox");
+        var prepared = WorkshopCatalog.PrepareSubmission(installedPet with { Name = "Mor/Kedi:1" }, outbox);
+        Check(File.Exists(prepared) && Path.GetDirectoryName(prepared) == outbox && Path.GetFileName(prepared) == "MorKedi1.png",
+            "the picture to send is prepared under a safe name");
         Directory.Delete(petRoot, true);
 
         // Background model: only when a local copy is given (second argument) or already installed.
         if (args.Length > 1) BackgroundRemover.ModelPath = args[1];
-        if (BackgroundRemover.ModelPresent)
+        if (BackgroundRemover.Status() == BackgroundRemover.ModelStatus.Ready)
         {
             var aiPicture = PetImage.FromBitmap(SamplePicture());
             var aiMask = BackgroundRemover.Predict(aiPicture);
@@ -731,6 +865,53 @@ internal static class Tests
             for (int k = 0; k < 8; k++) crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320 : crc >> 1;
         }
         return ~crc;
+    }
+
+    /// <summary>Serves fixed bytes per path instead of the network, and records what was asked.</summary>
+    sealed class FakeWeb : System.Net.Http.HttpMessageHandler
+    {
+        public readonly Dictionary<string, byte[]> Pages = new();
+        public readonly List<string> Requests = new();
+        public bool HideLength;
+        /// <summary>When set, requests wait for it (or for cancellation), like a slow connection.</summary>
+        public TaskCompletionSource? Hold;
+
+        protected override async Task<System.Net.Http.HttpResponseMessage> SendAsync(System.Net.Http.HttpRequestMessage request,
+            System.Threading.CancellationToken cancel)
+        {
+            var url = request.RequestUri!.ToString();
+            Requests.Add(url);
+            if (Hold is { } hold) await hold.Task.WaitAsync(cancel);
+            var path = request.RequestUri.AbsolutePath.TrimStart('/');
+            if (!Pages.TryGetValue(path, out var body))
+                return new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.NotFound);
+            System.Net.Http.HttpContent content = HideLength
+                ? new System.Net.Http.StreamContent(new UnknownLength(body))
+                : new System.Net.Http.ByteArrayContent(body);
+            return new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = content };
+        }
+
+        /// <summary>A stream that does not tell its length, like a chunked response.</summary>
+        sealed class UnknownLength(byte[] data) : MemoryStream(data)
+        {
+            public override bool CanSeek => false;
+        }
+    }
+
+    /// <summary>Reads a real catalog (e.g. a Petglare-Workshop branch) and adds its first pet to a temporary library.</summary>
+    static int CatalogCheck(string baseUrl, string libraryRoot)
+    {
+        WorkshopCatalog.BaseUrl = baseUrl.EndsWith('/') ? baseUrl : baseUrl + "/";
+        WorkshopCatalog.SetEnabled(true);
+        PetLibrary.Root = libraryRoot;
+        var app = new Application();
+        var pets = WorkshopCatalog.LoadAsync(default).GetAwaiter().GetResult();
+        Console.WriteLine($"catalog: {pets.Count} pet(s): {string.Join(", ", pets.Select(p => p.Id))}");
+        if (pets.Count == 0) return 1;
+        var pet = WorkshopCatalog.InstallAsync(pets[0], null, default).GetAwaiter().GetResult();
+        var saved = PetImage.Decode(pet.ImagePath);
+        Console.WriteLine($"installed: {pet.Name} origin={pet.Origin} {saved.PixelWidth}x{saved.PixelHeight} at {pet.Folder}");
+        return 0;
     }
 
     static bool Throws(Action action)

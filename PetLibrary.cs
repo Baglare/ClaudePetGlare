@@ -10,7 +10,7 @@ using System.Windows.Media.Imaging;
 namespace Petglare;
 
 /// <summary>A pet the user made or imported.</summary>
-internal sealed record PetInfo(string Id, string Name, DateTime Created, string Folder)
+internal sealed record PetInfo(string Id, string Name, DateTime Created, string Folder, string? Origin = null)
 {
     internal string ImagePath => Path.Combine(Folder, PetLibrary.ImageFile);
     internal string Key => PetLibrary.Prefix + Id;
@@ -50,6 +50,8 @@ internal static class PetLibrary
         public string Name { get; set; } = "";
         public DateTime Created { get; set; }
         public string Sha256 { get; set; } = "";
+        /// <summary>Where the pet came from, e.g. "workshop:mor-kedi-12"; null for pets made here.</summary>
+        public string? Origin { get; set; }
     }
 
     internal static bool IsCustom(string? mascot) => mascot?.StartsWith(Prefix, StringComparison.Ordinal) == true;
@@ -73,7 +75,8 @@ internal static class PetLibrary
         {
             if (!File.Exists(Path.Combine(folder, ImageFile))) return null;
             var meta = JsonSerializer.Deserialize<Meta>(File.ReadAllText(Path.Combine(folder, InfoFile)));
-            return meta is null ? null : new PetInfo(id, CleanName(meta.Name), meta.Created, folder);
+            return meta is null ? null : new PetInfo(id, CleanName(meta.Name), meta.Created, folder,
+                meta.Origin is { Length: <= 80 } origin ? origin : null);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -85,25 +88,30 @@ internal static class PetLibrary
 
     internal static string CleanName(string? name)
     {
-        var clean = new string((name ?? "").Where(c => !char.IsControl(c)).ToArray()).Trim();
+        // Control characters and invisible format characters (e.g. right-to-left overrides that can make a
+        // name read as something else) go; the zero-width joiner stays so combined emoji keep working.
+        var clean = new string((name ?? "").Where(c => !char.IsControl(c)
+            && (c == '‍' || char.GetUnicodeCategory(c) != System.Globalization.UnicodeCategory.Format)).ToArray()).Trim();
         if (clean.Length > MaxNameLength) clean = clean[..MaxNameLength].TrimEnd();
         return clean.Length == 0 ? "Adsız pet" : clean;
     }
 
     /// <summary>Saves a new pet (<paramref name="id"/> null) or overwrites one, keeping what is needed to edit it again.</summary>
-    internal static PetInfo Save(string? id, string name, PetImage image)
+    internal static PetInfo Save(string? id, string name, PetImage image, string? origin = null)
     {
         var pet = image.ComposePet();
         id ??= NewId();
         if (!IsSafeId(id)) throw new ArgumentException("Geçersiz pet kimliği.");
         var folder = Path.Combine(Root, id);
         Directory.CreateDirectory(folder);
-        var created = Find(id)?.Created ?? DateTime.UtcNow;
+        var existing = Find(id);
+        var created = existing?.Created ?? DateTime.UtcNow;
+        origin ??= existing?.Origin;
         var png = PetImage.Png(pet);
         WriteAtomic(Path.Combine(folder, ImageFile), png);
         WriteAtomic(Path.Combine(folder, SourceFile), image.SourcePng());
         WriteAtomic(Path.Combine(folder, MaskFile), image.MaskPng());
-        WriteMeta(folder, new Meta { Name = CleanName(name), Created = created, Sha256 = Hash(png) });
+        WriteMeta(folder, new Meta { Name = CleanName(name), Created = created, Sha256 = Hash(png), Origin = origin });
         Changed?.Invoke();
         return Find(id)!;
     }
@@ -111,7 +119,8 @@ internal static class PetLibrary
     internal static void Rename(string id, string name)
     {
         var pet = Find(id) ?? throw new FileNotFoundException("Pet bulunamadı.");
-        WriteMeta(pet.Folder, new Meta { Name = CleanName(name), Created = pet.Created, Sha256 = Hash(File.ReadAllBytes(pet.ImagePath)) });
+        WriteMeta(pet.Folder, new Meta { Name = CleanName(name), Created = pet.Created,
+            Sha256 = Hash(File.ReadAllBytes(pet.ImagePath)), Origin = pet.Origin });
         Changed?.Invoke();
     }
 
@@ -177,10 +186,19 @@ internal static class PetLibrary
             png = File.ReadAllBytes(path);
         }
 
-        // Header first: size limits apply before any pixel is decoded.
+        return ImportImage(png, name);
+    }
+
+    /// <summary>
+    /// Adds a pet from picture bytes from elsewhere (a file, the Workshop catalog). The header is
+    /// checked before any pixel is decoded, and the picture is re-encoded before it is stored.
+    /// </summary>
+    internal static PetInfo ImportImage(byte[] png, string name, string? origin = null)
+    {
+        if (png.Length > MaxImportBytes) throw new InvalidDataException("Görsel çok büyük.");
         var decoded = PetImage.Decode(new MemoryStream(png, writable: false), PetImage.EditSide);
         var picture = PetImage.FromBitmap(decoded, PetImage.EditSide);
-        return Save(null, name, picture);
+        return Save(null, name, picture, origin);
     }
 
     /// <summary>Reads a zip entry but never more than <paramref name="limit"/> bytes, whatever its header claims.</summary>

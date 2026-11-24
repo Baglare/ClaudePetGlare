@@ -44,7 +44,12 @@ public partial class SettingsWindow : Window
         statusTimer.Tick += (_, _) => { statusTimer.Stop(); Status.Text = ""; };
         SourceInitialized += (_, _) => UseDarkTitleBar();
         PetLibrary.Changed += LibraryChanged;
-        Closed += (_, _) => PetLibrary.Changed -= LibraryChanged;
+        Closed += (_, _) =>
+        {
+            PetLibrary.Changed -= LibraryChanged;
+            // Closing without applying returns to the saved choice.
+            WorkshopCatalog.SetEnabled(current.WorkshopOnline);
+        };
         Build();
     }
 
@@ -91,6 +96,22 @@ public partial class SettingsWindow : Window
             draft.ShowProject, v => draft.ShowProject = v);
         Switch("Tamamlanma parıltısı", "Yanıt bitince maskotun yanında kalır; Claude’a geçince kaybolur.",
             draft.ShowSpark != false, v => draft.ShowSpark = v);
+
+        Section("Workshop");
+        var browse = new Button { Content = "Workshop’tan pet bul…", Style = StyleOf("Secondary"), Margin = new Thickness(0, 10, 0, 0),
+            HorizontalAlignment = HorizontalAlignment.Left, IsEnabled = draft.WorkshopOnline };
+        Switch("Workshop’a bağlan (internet)",
+            "Açıkken Petglare yalnız Workshop kataloğunu ve eklediğin pet görsellerini GitHub’dan (raw.githubusercontent.com) okur. "
+            + "Kapalıyken Workshop için internete hiç bağlanmaz. Pet göndermek tarayıcıda GitHub formuyla olur.",
+            draft.WorkshopOnline, v =>
+            {
+                draft.WorkshopOnline = v;
+                browse.IsEnabled = v;
+                // Takes effect at once: off closes an open catalog and stops its downloads.
+                WorkshopCatalog.SetEnabled(v);
+            });
+        browse.Click += (_, _) => OpenCatalog();
+        Sections.Children.Add(browse);
 
         Section("Ekranda kalma");
         Switch("Her zaman en üstte", "Kenarlıksız pencere modundaki oyunlarda da üstte kalır. Özel tam ekran "
@@ -326,6 +347,7 @@ public partial class SettingsWindow : Window
         }
         Item("Düzenle…", () => OpenWorkshop(pet));
         Item("Dışa aktar…", () => ExportPet(pet));
+        Item("Workshop’a gönder…", () => SubmitPet(pet));
         menu.Items.Add(new Separator());
         Item("Sil", () => DeletePet(pet));
         return menu;
@@ -340,6 +362,40 @@ public partial class SettingsWindow : Window
             ShowStatus(pet is null ? $"“{made.Name}” eklendi; Uygula ile masaüstüne geçer" : $"“{made.Name}” güncellendi");
         }, draft) { Owner = this };
         workshop.ShowDialog();
+    }
+
+    private CatalogWindow? catalog;
+
+    private void OpenCatalog()
+    {
+        if (!draft.WorkshopOnline) return;
+        if (catalog is { IsLoaded: true })
+        {
+            catalog.Activate();
+            return;
+        }
+        catalog = new CatalogWindow(pet => ShowStatus($"“{pet.Name}” eklendi")) { Owner = this };
+        catalog.Closed += (_, _) => catalog = null;
+        catalog.Show();
+    }
+
+    private void SubmitPet(PetInfo pet)
+    {
+        if (MessageBox.Show(this,
+                $"“{pet.Name}” Petglare Workshop’a gönderilecek.\n\n"
+                + "Tarayıcıda GitHub’daki gönderim formu açılır ve pet görseli Gezgin’de seçili olur; görseli forma sürükleyip gönder. "
+                + "Bunun için GitHub hesabı gerekir.\n\nGönderim herkese açıktır ve CC BY 4.0 ile paylaşılır; "
+                + "bakımcı onaylayınca kataloğa girer. Devam edilsin mi?",
+                "Workshop’a gönder", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        try
+        {
+            WorkshopCatalog.OpenSubmission(pet);
+            ShowStatus("Form tarayıcıda açıldı");
+        }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            ShowStatus("Gönderim hazırlanamadı: " + ex.Message);
+        }
     }
 
     private void ImportPet()
