@@ -50,7 +50,7 @@ Completion is displayed for four seconds; a small reminder remains until Claude 
 
 ### Appearance and fullscreen
 
-Choose a built-in cat, drop or ghost, or a custom pet. Mascot scale is 60–200%, opacity 30–100%, bubble scale 85–130%. The mascot can be dragged over the Windows taskbar and snapped to monitor edges. The always-on-top option works with borderless fullscreen applications; exclusive fullscreen can prevent ordinary Windows overlays from appearing. Fullscreen hiding and click locking are optional.
+Choose a built-in cat, drop or ghost, or a custom pet. Mascot scale is 60–200%, opacity 30–100%, bubble scale 85–130%. The mascot can be dragged over the Windows taskbar and snapped to monitor edges. The always-on-top option works with borderless fullscreen applications; exclusive fullscreen can prevent ordinary Windows overlays from appearing. Microsoft Store apps such as Media Player also move to a separate Windows layer above desktop windows in fullscreen (F11), so the mascot cannot appear there; watching in a maximized window keeps it on top. Fullscreen hiding and click locking are optional.
 
 ## Make your own pet
 
