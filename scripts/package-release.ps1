@@ -12,10 +12,28 @@ New-Item -ItemType Directory -Path (Join-Path $stage 'licenses') | Out-Null
 Copy-Item -LiteralPath (Join-Path $delivery 'Petglare.exe') -Destination $stage
 foreach ($file in @('Kur.cmd','Hooklari-Kaldir.cmd','README.md','README.tr.md','LICENSE','THIRD_PARTY_NOTICES.md')) { Copy-Item -LiteralPath (Join-Path $root $file) -Destination $stage }
 Copy-Item -LiteralPath (Join-Path $root 'Assets\Petglare-README-Banner-2400x750.png') -Destination (Join-Path $stage 'Assets')
-# Include the license and notices for the exact native runtime version distributed.
-$upstream = 'https://raw.githubusercontent.com/microsoft/onnxruntime/v1.20.1'
-Invoke-WebRequest -UseBasicParsing -Uri "$upstream/LICENSE" -OutFile (Join-Path $stage 'licenses\ONNXRuntime-LICENSE.txt')
-Invoke-WebRequest -UseBasicParsing -Uri "$upstream/ThirdPartyNotices.txt" -OutFile (Join-Path $stage 'licenses\ONNXRuntime-ThirdPartyNotices.txt')
+# Use the license and notices shipped in the restored NuGet packages, not a mutable URL.
+$assets = Get-Content -Raw (Join-Path $root 'obj\project.assets.json') | ConvertFrom-Json
+$packageRoots = @($assets.packageFolders.PSObject.Properties.Name)
+foreach ($packageId in @('microsoft.ml.onnxruntime','microsoft.ml.onnxruntime.managed')) {
+    $relative = ($assets.libraries.PSObject.Properties | Where-Object { $_.Name -like "$packageId/*" } | Select-Object -First 1).Value.path
+    if (-not $relative) { throw "Missing restored package $packageId" }
+    $package = $packageRoots | ForEach-Object { Join-Path $_ $relative } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if (-not $package) { throw "Missing package directory: $packageId" }
+    $documents = @(Get-ChildItem -LiteralPath $package -File -Recurse | Where-Object { $_.Name -match '^(LICENSE|LICENCE|ThirdPartyNotices|THIRD-PARTY-NOTICES|NOTICE)(\.[a-z0-9]+)?$' })
+    if (-not ($documents | Where-Object { $_.Name -match '^(LICENSE|LICENCE)(\.|$)' })) { throw "Missing license in $packageId" }
+    if ($packageId -eq 'microsoft.ml.onnxruntime' -and -not ($documents | Where-Object { $_.Name -match 'NOTICE' })) { throw "Missing notices in $packageId" }
+    foreach ($doc in $documents) {
+        $relativeDoc = $doc.FullName.Substring($package.Length).TrimStart('\','/')
+        $name = "$packageId-$($relativeDoc -replace '[\\/]','-')"
+        Copy-Item -LiteralPath $doc.FullName -Destination (Join-Path $stage "licenses\$name")
+    }
+}
+# Record the source revision inside the distributable.
+$commit = git rev-parse HEAD
+if ($LASTEXITCODE -ne 0) { throw 'Unable to identify source revision' }
+Set-Content -LiteralPath (Join-Path $stage 'BUILD-COMMIT.txt') -Value $commit -Encoding ascii
+
 $zip = Join-Path $delivery 'Petglare-Windows-x64.zip'
 Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -Force
 Get-FileHash -Algorithm SHA256 -LiteralPath $zip
