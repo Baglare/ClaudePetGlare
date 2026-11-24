@@ -115,7 +115,8 @@ public partial class SettingsWindow : Window
 
         Section("Ekranda kalma");
         Switch("Her zaman en üstte", "Kenarlıksız pencere modundaki oyunlarda da üstte kalır. Özel tam ekran "
-            + "modundaki oyunların üstüne Windows hiçbir pencereyi çizdirmez.",
+            + "modundaki oyunların ve Medya Oynatıcı gibi Microsoft Store uygulamalarının tam ekranının "
+            + "üstüne Windows hiçbir pencereyi çizdirmez.",
             draft.AlwaysOnTop, v => draft.AlwaysOnTop = v);
         Switch("Tam ekranda gizle", "Aynı ekranda tam ekran bir uygulama açıkken maskot saklanır.",
             draft.HideInFullScreen, v => draft.HideInFullScreen = v);
