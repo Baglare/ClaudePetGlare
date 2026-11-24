@@ -6,7 +6,8 @@ namespace Petglare;
 /// <summary>Starts Petglare when the current user signs in to Windows.</summary>
 internal static class AutoStart
 {
-    private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    /// <summary>The per-user Run key; tests point this at a scratch key.</summary>
+    internal static string RunKey { get; set; } = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string ValueName = "Petglare";
 
     private static string Command => $"\"{Environment.ProcessPath}\"";
@@ -20,6 +21,21 @@ internal static class AutoStart
             return key?.GetValue(ValueName) is string value
                 && value.Equals(Command, StringComparison.OrdinalIgnoreCase);
         }
+    }
+
+    /// <summary>
+    /// After the Petglare folder was moved: when the start entry points at a Petglare.exe that no
+    /// longer exists, points it here. Returns whether it changed.
+    /// </summary>
+    internal static bool Relocate(bool allowed = false)
+    {
+        if (!allowed) return false;
+        using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true);
+        if (key?.GetValue(ValueName) is not string value) return false;
+        var executable = value.Trim().Trim('"');
+        if (value.Equals(Command, StringComparison.OrdinalIgnoreCase) || !HookSettings.IsMovedPetglare(executable)) return false;
+        key.SetValue(ValueName, Command, RegistryValueKind.String);
+        return true;
     }
 
     internal static void Set(bool enabled)

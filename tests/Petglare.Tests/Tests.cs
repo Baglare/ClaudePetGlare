@@ -126,6 +126,51 @@ internal static class Tests
         HookSettings.Update(file, false);
         var removed = File.ReadAllText(file);
         Check(!removed.Contains("petglare") && removed.Contains("other.exe") && !removed.Contains("Notification"), "uninstall removes only ours");
+
+        // Moving the Petglare folder: own hooks pointing at a vanished Petglare.exe follow it
+        string Escaped(string p) => JsonSerializer.Serialize(p)[1..^1];
+        var moved = Path.Combine(dir, "moved.json");
+        File.WriteAllText(moved, "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"other.exe\"}]}]}}");
+        HookSettings.Update(moved, true);
+        var gone = Path.Combine(dir, "eski-klasor", "Petglare.exe");
+        File.WriteAllText(moved, File.ReadAllText(moved).Replace(Escaped(Environment.ProcessPath!), Escaped(gone)));
+        Check(!HookSettings.Inspect(moved).Installed, "hooks of a moved copy are reported as not current");
+        var withoutConsent = File.ReadAllText(moved);
+        Check(!HookSettings.Relocate(moved) && File.ReadAllText(moved) == withoutConsent, "no automatic hook repair without consent");
+        Check(new Preferences().AutoRelocate != true && JsonSerializer.Deserialize<Preferences>("{\"AutoRelocate\":true}")!.AutoRelocate == true, "relocation opt-in defaults off and persists");
+        Check(HookSettings.Relocate(moved, allowed: true) && HookSettings.Inspect(moved).Installed
+              && File.ReadAllText(moved).Contains("other.exe") && !File.ReadAllText(moved).Contains("eski-klasor"),
+            "own hooks follow the moved Petglare; other hooks stay");
+        Check(!HookSettings.Relocate(moved, allowed: true), "relocation does nothing once hooks point here");
+        var otherCopy = Path.Combine(dir, "baska-kopya", "Petglare.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(otherCopy)!);
+        File.WriteAllText(otherCopy, "");
+        File.WriteAllText(moved, File.ReadAllText(moved).Replace(Escaped(Environment.ProcessPath!), Escaped(otherCopy)));
+        var keep = File.ReadAllText(moved);
+        Check(!HookSettings.Relocate(moved, allowed: true) && File.ReadAllText(moved) == keep, "another Petglare copy that still exists keeps its hooks");
+        var none = Path.Combine(dir, "none.json");
+        File.WriteAllText(none, "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"other.exe\"}]}]}}");
+        Check(!HookSettings.Relocate(none, allowed: true) && !File.ReadAllText(none).Contains("petglare"), "relocation never installs hooks that were not there");
+        Check(!HookSettings.IsMovedPetglare(@"eski\Petglare.exe") && !HookSettings.IsMovedPetglare(Path.Combine(dir, "notepad.exe"))
+              && HookSettings.IsMovedPetglare(gone), "only a vanished, fully named Petglare.exe counts as moved");
+
+        // The Windows start entry follows the same rule (on a scratch registry key)
+        var realRunKey = AutoStart.RunKey;
+        AutoStart.RunKey = $@"Software\PetglareTest-{Guid.NewGuid():N}";
+        try
+        {
+            Check(!AutoStart.Relocate(allowed: true), "no start entry, nothing to relocate");
+            using (var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(AutoStart.RunKey)) key.SetValue("Petglare", $"\"{gone}\"");
+            Check(!AutoStart.Relocate() && !AutoStart.IsEnabled, "no startup repair without consent");
+            Check(AutoStart.Relocate(allowed: true) && AutoStart.IsEnabled, "a start entry to a vanished Petglare follows it");
+            using (var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(AutoStart.RunKey)) key.SetValue("Petglare", $"\"{otherCopy}\"");
+            Check(!AutoStart.Relocate(allowed: true) && !AutoStart.IsEnabled, "a start entry to another existing copy is left alone");
+        }
+        finally
+        {
+            Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(AutoStart.RunKey, throwOnMissingSubKey: false);
+            AutoStart.RunKey = realRunKey;
+        }
         Directory.Delete(dir, true);
 
         // Parallel tools in one session (tool_use_id)

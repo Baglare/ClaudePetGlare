@@ -1,6 +1,6 @@
 # Petglare — ajan yönergeleri
 
-Petglare, Claude Code hook olaylarını yerel named pipe üzerinden alan ve durumu masaüstünde bir maskotla gösteren Windows 11 WPF uygulamasıdır (.NET 10, `net10.0-windows`). Kullanıcıya dönük belge [README.md](README.md); arayüz ve mesajlar Türkçedir.
+Petglare, Claude Code hook olaylarını yerel named pipe üzerinden alan ve durumu masaüstünde bir maskotla gösteren Windows 11 WPF uygulamasıdır (.NET 10, `net10.0-windows`). Kullanıcıya dönük belgeler [README.md](README.md) ve [README.tr.md](README.tr.md); arayüz ve mesajlar Türkçedir.
 
 ## Konum ve hafıza
 
@@ -36,7 +36,7 @@ Maskot çizimleri `PetView.xaml` içindeki vektör yollarıdır. Marka görselle
 dotnet build -c Debug
 dotnet run --project tests\Petglare.Tests -- <PNG klasörü>
 dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:EnableSingleFileAnalyzer=false -p:DebugType=None -o .\Teslim
-Compress-Archive -Path .\Teslim\Petglare.exe, .\Kur.cmd, .\Hooklari-Kaldir.cmd, .\README.md -DestinationPath .\Teslim\Petglare-Windows-x64.zip -Force
+powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
 ```
 
 - Arka plan modeli testi yalnız model varsa çalışır: ikinci argüman yerel `u2netp.onnx` yolu olabilir (`dotnet run --project tests\Petglare.Tests -- <PNG klasörü> <model yolu>`); yoksa `SKIP` yazar.
@@ -48,6 +48,6 @@ Compress-Archive -Path .\Teslim\Petglare.exe, .\Kur.cmd, .\Hooklari-Kaldir.cmd, 
 
 - Hook yolu Claude'un her araç çağrısında çalışır: hızlı kalmalı, Claude'un hook sonucunu asla değiştirmemeli (`--hook` her durumda 0 döner).
 - Prompt, dosya içeriği, ham komut veya transkript iletme/kaydetme; yalnız olay türü, araç türü, dosya adı ve proje klasörü adı.
-- Kullanıcının gerçek `~/.claude/settings.json` dosyasını yalnız kullanıcı isteyince değiştir (kurulum, onarım).
+- Kullanıcının gerçek `~/.claude/settings.json` dosyasını yalnız kullanıcı isteyince değiştir (kurulum, elle onarım veya açıkça izin verilmiş kalıcı otomatik taşıma onarımı).
 - Kullanıcı oyun oynarken masaüstünde test penceresi açma; görsel kontrolü test projesinin ekran dışı render'larıyla yap.
 - Commit/push yalnız kullanıcı isteyince; varsayılan daldaysan önce dal aç.

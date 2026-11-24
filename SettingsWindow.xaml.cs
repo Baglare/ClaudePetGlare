@@ -126,6 +126,8 @@ public partial class SettingsWindow : Window
         Switch("Ekran kenarlarına yasla", "Kenara yakın bırakınca maskot kenara oturur.",
             draft.SnapToEdges, v => draft.SnapToEdges = v);
         Switch("Windows açılırken başlat", null, autoStart, v => autoStart = v);
+        Switch("Taşınan bağlantıları otomatik onar", "Açıkken yalnız artık bulunmayan Petglare.exe yolunu gösteren kendi Claude hook’ları ve Windows başlangıç kaydı otomatik güncellenir.",
+            draft.AutoRelocate == true, v => draft.AutoRelocate = v);
         var corner = new Button { Content = "Sağ alt köşeye taşı", Style = StyleOf("Secondary"), Margin = new Thickness(0, 6, 0, 0),
             HorizontalAlignment = HorizontalAlignment.Left };
         corner.Click += (_, _) => { moveToCorner(); ShowStatus("Maskot sağ alt köşeye taşındı"); };
