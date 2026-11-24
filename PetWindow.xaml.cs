@@ -109,6 +109,7 @@ public partial class PetWindow : Window
                     (_, _) => Dispatcher.InvokeAsync(ShowFromSecondLaunch), null, Timeout.Infinite, false);
             UpdateVisibility();
             RenderStatus();
+            RelocateAfterMove();
             CheckHooksAtStartup();
             PetLibrary.Changed += LibraryChanged;
             WorkshopCatalog.SetEnabled(prefs.WorkshopOnline);
@@ -193,6 +194,21 @@ public partial class PetWindow : Window
 
     private DiagnosticsSnapshot Snapshot() => new(listening, listenError, lastNotice, lastNoticeAt,
         noticeCount, state.Sessions.Count, state.ActiveCount);
+
+    /// <summary>
+    /// The folder was moved: Petglare's own hooks and start entry still point at the old,
+    /// now missing Petglare.exe. They are updated to this one without asking (user's choice, 2026-11-24).
+    /// </summary>
+    private void RelocateAfterMove()
+    {
+        bool hooks = false, start = false;
+        try { hooks = HookSettings.Relocate(); }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException or InvalidOperationException
+                                       or System.Text.Json.JsonException) { }
+        try { start = AutoStart.Relocate(); }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException or System.IO.IOException) { }
+        if (hooks || start) Say("Petglare yeni klasörüne taşındı; Claude bağlantısı güncellendi", warning: false, seconds: 8);
+    }
 
     private void CheckHooksAtStartup()
     {

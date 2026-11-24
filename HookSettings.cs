@@ -60,6 +60,38 @@ internal static class HookSettings
         return Path.Combine(directory, "settings.json");
     }
 
+    /// <summary>
+    /// After the Petglare folder was moved: when Petglare's own hooks all point at a Petglare.exe
+    /// that no longer exists, points them at this executable. Hooks of other tools, a missing
+    /// installation and hooks of another Petglare copy that still exists are left alone.
+    /// Returns whether the settings file changed.
+    /// </summary>
+    internal static bool Relocate(string? path = null)
+    {
+        path = Path.GetFullPath(path ?? DefaultPath());
+        var inspection = Inspect(path);
+        if (inspection.Error is not null || !inspection.FileExists) return false;
+        if (inspection.Missing.Length == HookNotice.Events.Length) return false;
+        if (inspection.OtherExecutables.Length == 0 || !inspection.OtherExecutables.All(IsMovedPetglare)) return false;
+        return Update(path, install: true);
+    }
+
+    /// <summary>A full path to a Petglare.exe that is gone.</summary>
+    internal static bool IsMovedPetglare(string command)
+    {
+        try
+        {
+            return Path.IsPathFullyQualified(command)
+                   && Path.GetFileName(command).Equals("Petglare.exe", StringComparison.OrdinalIgnoreCase)
+                   && !File.Exists(command)
+                   && !string.Equals(Path.GetFullPath(command), Environment.ProcessPath, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
     internal static bool Update(string path, bool install)
     {
         using var gate = new Mutex(false, $@"Local\{HookPipe.Channel}-settings");
