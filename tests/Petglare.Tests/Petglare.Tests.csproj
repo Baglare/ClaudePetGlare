@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Headless checks for Petglare: hook parsing, the session state machine, hook installation
+    on a temporary settings file, and off-screen renders of the pet and the settings window.
+    The app's own sources are compiled in directly so internal types stay testable.
+    The assembly is named Petglare because hook installation only accepts Petglare.exe.
+    How to run it is in AGENTS.md at the repository root.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultPageItems>false</EnableDefaultPageItems>
+    <RootNamespace>Petglare</RootNamespace>
+    <AssemblyName>Petglare</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\..\*.cs" Exclude="..\..\Program.cs" />
+    <Compile Include="Tests.cs" />
+    <Compile Include="Bench.cs" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.20.1" />
+    <Page Include="..\..\*.xaml" />
+    <Resource Include="..\..\Assets\Petglare.ico" Link="Assets\Petglare.ico" />
+  </ItemGroup>
+</Project>

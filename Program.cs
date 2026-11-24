@@ -67,35 +67,53 @@ internal static class Program
 
     private static int RunPet()
     {
+        using var show = new EventWaitHandle(false, EventResetMode.AutoReset, $@"Local\{HookPipe.Channel}-show");
         using var instance = new Mutex(true, $@"Local\{HookPipe.Channel}-window", out var first);
-        if (!first) return 0;
-        return new Application().Run(new PetWindow());
+        if (!first)
+        {
+            // Bring back a pet that is hidden in the notification area.
+            show.Set();
+            return 0;
+        }
+        return new Application().Run(new PetWindow(show));
     }
 
     private static async Task<int> DemoAsync()
     {
         var pipe = new HookPipe();
-        var session = Guid.NewGuid().ToString("N");
-        var prompt = "";
-        foreach (var (name, tool, pause) in new (string, string?, int)[]
+        var main = Guid.NewGuid().ToString("N");
+        var other = Guid.NewGuid().ToString("N");
+        var prompts = new System.Collections.Generic.Dictionary<string, string>();
+        foreach (var (session, cwd, name, tool, file, pause) in new (string, string, string, string?, string?, int)[]
         {
-            ("UserPromptSubmit", null, 900),
-            ("PreToolUse", "Read", 1600),
-            ("PermissionRequest", null, 1400),
-            ("PreToolUse", "Bash", 1300),
-            ("Stop", null, 5700),
-            ("UserPromptSubmit", null, 1000),
-            ("StopFailure", null, 0)
+            (main, @"C:\Projeler\VoxForge", "SessionStart", null, null, 300),
+            (main, @"C:\Projeler\VoxForge", "UserPromptSubmit", null, null, 900),
+            (main, @"C:\Projeler\VoxForge", "PreToolUse", "Read", "Program.cs", 1300),
+            (main, @"C:\Projeler\VoxForge", "PostToolUse", "Read", "Program.cs", 700),
+            (other, @"C:\Projeler\Atlas\.claude\worktrees\yeni-ozellik", "UserPromptSubmit", null, null, 400),
+            (other, @"C:\Projeler\Atlas\.claude\worktrees\yeni-ozellik", "PreToolUse", "Grep", null, 1200),
+            (main, @"C:\Projeler\VoxForge", "PreToolUse", "Edit", "Program.cs", 1300),
+            (main, @"C:\Projeler\VoxForge", "PostToolUse", "Edit", "Program.cs", 500),
+            (main, @"C:\Projeler\VoxForge", "PreToolUse", "Bash", null, 1000),
+            (main, @"C:\Projeler\VoxForge", "PostToolUseFailure", "Bash", null, 2200),
+            (main, @"C:\Projeler\VoxForge", "PreToolUse", "Bash", null, 600),
+            (main, @"C:\Projeler\VoxForge", "PermissionRequest", null, null, 2600),
+            (main, @"C:\Projeler\VoxForge", "PostToolUse", "Bash", null, 900),
+            (other, @"C:\Projeler\Atlas\.claude\worktrees\yeni-ozellik", "Stop", null, null, 1500),
+            (main, @"C:\Projeler\VoxForge", "Stop", null, null, 5500),
+            (main, @"C:\Projeler\VoxForge", "UserPromptSubmit", null, null, 1000),
+            (main, @"C:\Projeler\VoxForge", "StopFailure", null, null, 0)
         })
         {
-            if (name == "UserPromptSubmit") prompt = Guid.NewGuid().ToString("N");
+            if (name == "UserPromptSubmit") prompts[session] = Guid.NewGuid().ToString("N");
             using var input = new MemoryStream(JsonSerializer.SerializeToUtf8Bytes(new
             {
                 hook_event_name = name,
                 session_id = session,
-                prompt_id = prompt,
+                prompt_id = prompts.TryGetValue(session, out var id) ? id : null,
+                cwd,
                 tool_name = tool,
-                tool_input = new { file_path = @"C:\Ornek\Program.cs" }
+                tool_input = new { file_path = file is null ? null : $@"{cwd}\{file}" }
             }));
             if (!await pipe.ForwardAsync(input))
             {
