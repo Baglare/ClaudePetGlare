@@ -27,8 +27,9 @@ internal static class AutoStart
     /// After the Petglare folder was moved: when the start entry points at a Petglare.exe that no
     /// longer exists, points it here. Returns whether it changed.
     /// </summary>
-    internal static bool Relocate()
+    internal static bool Relocate(bool allowed = false)
     {
+        if (!allowed) return false;
         using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true);
         if (key?.GetValue(ValueName) is not string value) return false;
         var executable = value.Trim().Trim('"');

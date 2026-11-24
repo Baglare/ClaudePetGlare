@@ -26,6 +26,8 @@ internal sealed class Preferences
     /// <summary>"Açık", "Tam ekranda kapalı" or "Kapalı".</summary>
     public string LeftClick { get; set; } = LeftClickOn;
     public bool SnapToEdges { get; set; } = true;
+    /// <summary>Explicit opt-in to repair obsolete Petglare hook and startup paths after a move.</summary>
+    public bool? AutoRelocate { get; set; }
 
     // Bubbles
     public string Bubble { get; set; } = "Gece";

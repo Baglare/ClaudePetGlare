@@ -43,6 +43,17 @@ internal static class Program
             try
             {
                 HookSettings.Update(HookSettings.DefaultPath(), install);
+                if (install)
+                {
+                    var prefs = Preferences.Load();
+                    if (prefs.AutoRelocate is null)
+                    {
+                        prefs.AutoRelocate = MessageBox.Show(
+                            "Klasörü ileride taşırsan Petglare’ın artık var olmayan eski EXE yolunu gösteren kendi Claude hook’larını ve Windows başlangıç kaydını otomatik onarmasına izin veriyor musun? Bu seçimi Ayarlar’dan değiştirebilirsin.",
+                            "Petglare · Otomatik taşıma onarımı", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) == MessageBoxResult.Yes;
+                        prefs.Save();
+                    }
+                }
                 MessageBox.Show(install
                         ? "Petglare bağlandı. Claude Desktop’ta Code → Local oturumu açabilirsin."
                         : "Petglare hook’ları kaldırıldı.",

@@ -66,8 +66,9 @@ internal static class HookSettings
     /// installation and hooks of another Petglare copy that still exists are left alone.
     /// Returns whether the settings file changed.
     /// </summary>
-    internal static bool Relocate(string? path = null)
+    internal static bool Relocate(string? path = null, bool allowed = false)
     {
+        if (!allowed) return false;
         path = Path.GetFullPath(path ?? DefaultPath());
         var inspection = Inspect(path);
         if (inspection.Error is not null || !inspection.FileExists) return false;

@@ -1,0 +1,35 @@
+name: Windows build and package
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build
+        shell: pwsh
+        run: dotnet build Petglare.csproj -c Release
+      - name: Regression tests
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'petglare-renders'
+          New-Item -ItemType Directory -Force $out | Out-Null
+          dotnet run --project tests/Petglare.Tests -c Release -- $out
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Package
+        shell: pwsh
+        run: .\scripts\package-release.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Petglare-Windows-x64
+          path: Teslim/Petglare-Windows-x64.zip
+          if-no-files-found: error

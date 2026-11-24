@@ -197,15 +197,15 @@ public partial class PetWindow : Window
 
     /// <summary>
     /// The folder was moved: Petglare's own hooks and start entry still point at the old,
-    /// now missing Petglare.exe. They are updated to this one without asking (user's choice, 2026-11-24).
+    /// now missing Petglare.exe. Repair runs only with the user's saved opt-in.
     /// </summary>
     private void RelocateAfterMove()
     {
         bool hooks = false, start = false;
-        try { hooks = HookSettings.Relocate(); }
+        try { hooks = HookSettings.Relocate(allowed: prefs.AutoRelocate == true); }
         catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException or InvalidOperationException
                                        or System.Text.Json.JsonException) { }
-        try { start = AutoStart.Relocate(); }
+        try { start = AutoStart.Relocate(allowed: prefs.AutoRelocate == true); }
         catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException or System.IO.IOException) { }
         if (hooks || start) Say("Petglare yeni klasörüne taşındı; Claude bağlantısı güncellendi", warning: false, seconds: 8);
     }
